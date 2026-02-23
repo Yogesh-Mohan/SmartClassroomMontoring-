@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:firebase_core/firebase_core.dart';
-import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import 'firebase_options.dart';
 import 'core/theme/app_theme.dart';
 import 'features/role_select/role_select_screen.dart';
@@ -11,10 +10,7 @@ Future<void> main() async {
   await Firebase.initializeApp(
     options: DefaultFirebaseOptions.currentPlatform,
   );
-  
-  // Initialize foreground task
-  FlutterForegroundTask.initCommunicationPort();
-  
+
   SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
   SystemChrome.setSystemUIOverlayStyle(
     const SystemUiOverlayStyle(
@@ -34,9 +30,7 @@ class SmartClassroomApp extends StatelessWidget {
       title: 'Smart Classroom Monitoring',
       debugShowCheckedModeBanner: false,
       theme: AppTheme.theme,
-      home: WithForegroundTask(
-        child: const RoleSelectScreen(),
-      ),
+      home: const RoleSelectScreen(),
       builder: (context, child) {
         return MediaQuery(
           data: MediaQuery.of(context).copyWith(textScaler: TextScaler.noScaling),
