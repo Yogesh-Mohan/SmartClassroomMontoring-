@@ -41,6 +41,9 @@ dependencies:
   table_calendar: ^3.2.0
   firebase_core: ^4.4.0
   firebase_auth: ^6.1.4
+  flutter_foreground_task: ^8.17.0
+  flutter_local_notifications: ^18.0.1
+  screen_state: ^5.0.0
 
 dev_dependencies:
   flutter_test:

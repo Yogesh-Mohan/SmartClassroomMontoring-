@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_gradients.dart';
+import '../../services/monitor_service.dart';
 import 'home/student_home_screen.dart';
 import 'attendance/attendance_screen.dart';
 import 'timetable/timetable_screen.dart';
@@ -20,6 +21,7 @@ class _StudentShellState extends State<StudentShell> {
   int _currentIndex = 0;
 
   late final List<Widget> _pages;
+  final ScreenMonitorService _monitorService = ScreenMonitorService();
 
   @override
   void initState() {
@@ -31,6 +33,27 @@ class _StudentShellState extends State<StudentShell> {
       const AlertsScreen(),
       StudentProfileScreen(studentData: widget.studentData),
     ];
+    
+    // Start screen monitoring for this student
+    _initializeMonitoring();
+  }
+
+  Future<void> _initializeMonitoring() async {
+    final studentId = widget.studentData['id'] ??
+        widget.studentData['registrationNumber'] ?? 'unknown';
+    final studentName = widget.studentData['name'] ?? 'Student';
+
+    final started = await _monitorService.startMonitoring(studentId, studentName);
+    debugPrint(started
+        ? 'Screen monitoring started for: $studentName'
+        : 'Failed to start screen monitoring');
+  }
+
+  @override
+  void dispose() {
+    // Stop monitoring when student logs out or app closes
+    _monitorService.stopMonitoring();
+    super.dispose();
   }
 
   static const _navItems = [
