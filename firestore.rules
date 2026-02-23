@@ -1,0 +1,47 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ── STUDENTS ──────────────────────────────────────────────────────────────
+    // Any authenticated user can read (needed for login flow to fetch profile).
+    // Only the matching student (by uid) can update their own doc.
+    // No one can create/delete from the app.
+    match /students/{docId} {
+      allow read: if request.auth != null;
+      allow update: if request.auth != null
+                    && request.auth.uid == resource.data.uid;
+      allow create, delete: if false;
+    }
+
+    // ── ADMINS ────────────────────────────────────────────────────────────────
+    match /admins/{docId} {
+      allow read: if request.auth != null;
+      allow update: if request.auth != null
+                    && request.auth.uid == resource.data.uid;
+      allow create, delete: if false;
+    }
+
+    // ── DEVICES ───────────────────────────────────────────────────────────────
+    // Authenticated users can read device/sensor data; IoT devices write via
+    // server-side admin SDK (not affected by client rules).
+    match /devices/{docId} {
+      allow read: if request.auth != null;
+      allow write: if false;
+    }
+
+    // ── SCHEDULE & TIMETABLES ─────────────────────────────────────────────────
+    match /schedule/{docId} {
+      allow read: if request.auth != null;
+      allow write: if false;
+    }
+    match /timetables/{docId} {
+      allow read: if request.auth != null;
+      allow write: if false;
+    }
+
+    // ── BLOCK EVERYTHING ELSE ────────────────────────────────────────────────
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

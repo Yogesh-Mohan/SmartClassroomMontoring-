@@ -1,0 +1,54 @@
+{
+  "project_info": {
+    "project_number": "859204587040",
+    "project_id": "smartclassroommontoring",
+    "storage_bucket": "smartclassroommontoring.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:859204587040:android:482712043611d5b5203645",
+        "android_client_info": {
+          "package_name": "com.smartclassroom.smart_classroom"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "859204587040-1i9cm9ff469r6bpkb8ctodh14qu8e3c1.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.smartclassroom.smart_classroom",
+            "certificate_hash": "e88a58b26a0690b45defb5a1f30fd7f48a45cbbc"
+          }
+        },
+        {
+          "client_id": "859204587040-mb0bnma7gpq4frg41j89uau3acmf309e.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyB_gfY45rErVh5wZij2CCMnrYXs1TqXkzA"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "859204587040-mb0bnma7gpq4frg41j89uau3acmf309e.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "859204587040-23phrmrgv3n23js2oan572f3e6tf8nee.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.smartclassroom.smartClassroom"
+              }
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
