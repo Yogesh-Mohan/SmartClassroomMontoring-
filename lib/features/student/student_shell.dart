@@ -43,10 +43,46 @@ class _StudentShellState extends State<StudentShell> {
         widget.studentData['registrationNumber'] ?? 'unknown';
     final studentName = widget.studentData['name'] ?? 'Student';
 
+    // Check Usage Access permission — needed for foreground app detection.
+    // Service still starts in fail-safe mode even without it.
+    final hasPermission = await _monitorService.hasUsagePermission();
+    if (!hasPermission && mounted) {
+      _showUsagePermissionDialog();
+    }
+
     final started = await _monitorService.startMonitoring(studentId, studentName);
     debugPrint(started
         ? 'Screen monitoring started for: $studentName'
         : 'Failed to start screen monitoring');
+  }
+
+  void _showUsagePermissionDialog() {
+    showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Permission Required'),
+        content: const Text(
+          'This app needs Usage Access permission to monitor which apps '
+          'are being used on the screen.\n\n'
+          'Please enable it for "Smart Classroom" in the next screen.\n\n'
+          'Go to: Settings → Apps → Special App Access → Usage Access',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('Later'),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              Navigator.of(ctx).pop();
+              _monitorService.requestUsagePermission();
+            },
+            child: const Text('Open Settings'),
+          ),
+        ],
+      ),
+    );
   }
 
   @override

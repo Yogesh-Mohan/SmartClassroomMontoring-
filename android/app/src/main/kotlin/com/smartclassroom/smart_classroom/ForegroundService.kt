@@ -1,6 +1,7 @@
 package com.smartclassroom.smart_classroom
 
 import android.app.*
+import android.app.usage.UsageStatsManager
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
@@ -15,49 +16,139 @@ import androidx.core.app.NotificationCompat
 /**
  * MonitoringService — Dedicated Android Foreground Service for screen monitoring.
  *
- * Timer Design:
- *  - Timer ONLY runs while the screen is ON (started on screen ON, stopped on screen OFF).
- *  - Uses a dedicated background HandlerThread — never blocks the main/UI thread.
- *  - Every 1 second: elapsedSeconds++
- *  - At elapsedSeconds >= 20: violation event fired, timer resets to 0, monitoring continues.
- *  - Screen OFF: timer stopped immediately, elapsedSeconds reset to 0.
- *  - START_STICKY + onTaskRemoved restart ensure service survives app swipe/close.
+ * Design:
+ *  - Uses UsageStatsManager to detect the foreground app every second.
+ *  - Maintains a BLOCKED_APPS set (social media, streaming, games, browsers).
+ *  - Timer runs ONLY when: screen is ON AND foreground app is in BLOCKED_APPS.
+ *  - Timer stops and resets immediately when a system/non-blocked app comes to foreground.
+ *  - Uses a dedicated HandlerThread — never blocks the main/UI thread.
+ *  - START_STICKY + onTaskRemoved ensures the service survives app close/swipe.
  */
 class MonitoringService : Service() {
 
     companion object {
-        const val NOTIFICATION_SERVICE_ID    = 1001
-        const val CHANNEL_SERVICE            = "smart_monitor_service"
-        const val CHANNEL_VIOLATION          = "smart_monitor_violation"
-        const val VIOLATION_THRESHOLD        = 20   // seconds
+        const val NOTIFICATION_SERVICE_ID = 1001
+        const val CHANNEL_SERVICE         = "smart_monitor_service"
+        const val CHANNEL_VIOLATION       = "smart_monitor_violation"
+        const val VIOLATION_THRESHOLD     = 20   // seconds
 
-        /** True while the service is running — read by MainActivity.isMonitoring. */
+        /** True while the service is running — read by MainActivity. */
         @Volatile var isRunning = false
+
+        /**
+         * Predefined list of user-interactive (distraction) app package names.
+         * Timer only runs when one of these is in the foreground.
+         */
+        val BLOCKED_APPS: Set<String> = setOf(
+            // ── Social Media ──────────────────────────────────────────────────
+            "com.instagram.android",
+            "com.facebook.katana",
+            "com.facebook.lite",
+            "com.twitter.android",
+            "com.twitter.android.lite",
+            "com.snapchat.android",
+            "com.whatsapp",
+            "com.whatsapp.w4b",
+            "org.telegram.messenger",
+            "com.zhiliaoapp.musically",    // TikTok
+            "com.ss.android.ugc.trill",    // TikTok (some regions)
+            "com.pinterest",
+            "com.reddit.frontpage",
+            "com.linkedin.android",
+            "com.tumblr",
+            "com.discord",
+
+            // ── Video Streaming ───────────────────────────────────────────────
+            "com.google.android.youtube",
+            "com.netflix.mediaclient",
+            "com.amazon.avod.thirdpartyclient",  // Prime Video
+            "com.disney.disneyplus",
+            "com.hotstar.android",
+            "tv.twitch.android.app",
+            "com.facebook.orca",            // Facebook Messenger
+            "com.vanced.android.youtube",   // YouTube Vanced
+            "app.revanced.android.youtube", // YouTube ReVanced
+
+            // ── Games (common categories) ─────────────────────────────────────
+            "com.supercell.clashofclans",
+            "com.supercell.clashroyale",
+            "com.supercell.brawlstars",
+            "com.king.candycrushsaga",
+            "com.activision.callofduty.shooter",
+            "com.garena.game.freefire",
+            "com.pubg.imobile",
+            "com.tencent.ig",               // PUBG Mobile
+            "com.kiloo.subwaysurf",
+            "com.outfit7.talkingtom2",
+            "com.mojang.minecraftpe",
+            "com.roblox.client",
+            "com.ea.game.pvzfree_row",
+
+            // ── Browsers ─────────────────────────────────────────────────────
+            "com.android.chrome",
+            "org.mozilla.firefox",
+            "com.opera.browser",
+            "com.opera.mini.native",
+            "com.microsoft.emmx",           // Edge
+            "com.brave.browser",
+            "com.UCMobile.intl",
+            "com.duckduckgo.mobile.android"
+        )
     }
 
-    // ── Background HandlerThread — all timer work runs here, never on main thread ──
+    // ── Background HandlerThread — all work runs here, never on main thread ──
     private lateinit var timerThread: HandlerThread
     private lateinit var timerHandler: Handler
 
     // ── State ─────────────────────────────────────────────────────────────────
-    @Volatile private var elapsedSeconds  = 0
-    @Volatile private var timerRunning    = false
-    private var violationCounter          = 0
-    private var graceActive               = true   // ignore first stale screenOff at startup
+    @Volatile private var elapsedSeconds    = 0
+    @Volatile private var timerRunning      = false  // actively counting seconds
+    @Volatile private var monitorActive     = false  // screen is ON
+    private var violationCounter            = 0
+    private var graceActive                 = true   // ignore first stale screenOff
+    private var lastForegroundApp           = ""     // track app switches
 
-    // ── 1-second tick Runnable (runs on timerHandler, not main thread) ────────
-    private val tickRunnable = object : Runnable {
+    // ── Combined monitor + timer Runnable ─────────────────────────────────────
+    //
+    // Runs every 1 second while monitorActive (screen ON).
+    // Step 1 — detect foreground app and classify it.
+    // Step 2 — start/stop timer based on classification.
+    // Step 3 — increment counter and fire violation if threshold reached.
+    private val monitorRunnable = object : Runnable {
         override fun run() {
-            elapsedSeconds++
+            val fgApp       = getForegroundApp()
+            val isBlocked   = isAppBlocked(fgApp)
 
-            if (elapsedSeconds >= VIOLATION_THRESHOLD) {
-                // ── Violation event ──────────────────────────────────────────
-                onViolationDetected()
-                elapsedSeconds = 0          // reset and keep monitoring
+            // ── App-switch handling ───────────────────────────────────────────
+            if (fgApp != lastForegroundApp) {
+                lastForegroundApp = fgApp
+                if (isBlocked) {
+                    // Switched TO a blocked app → reset and start timer
+                    elapsedSeconds = 0
+                    timerRunning   = true
+                    refreshServiceNotification("Monitoring app: $fgApp")
+                } else {
+                    // Switched TO a system/non-blocked app → stop and reset
+                    elapsedSeconds = 0
+                    timerRunning   = false
+                    refreshServiceNotification(
+                        if (fgApp.isEmpty()) "Screen ON – waiting for app"
+                        else "System app active – timer paused"
+                    )
+                }
             }
 
-            // Re-schedule next tick only if timer is still supposed to be running
+            // ── Timer count ───────────────────────────────────────────────────
             if (timerRunning) {
+                elapsedSeconds++
+                if (elapsedSeconds >= VIOLATION_THRESHOLD) {
+                    onViolationDetected()
+                    elapsedSeconds = 0      // reset, continue monitoring
+                }
+            }
+
+            // ── Re-schedule while screen is ON ────────────────────────────────
+            if (monitorActive) {
                 timerHandler.postDelayed(this, 1_000)
             }
         }
@@ -67,53 +158,68 @@ class MonitoringService : Service() {
     private val screenReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
             when (intent.action) {
-
-                // Screen turned on OR user dismissed the lock screen
                 Intent.ACTION_SCREEN_ON,
                 Intent.ACTION_USER_PRESENT -> {
-                    startScreenTimer()
-                    refreshServiceNotification("Screen ON – monitoring active")
+                    startMonitorLoop()
+                    refreshServiceNotification("Screen ON – detecting app…")
                 }
-
-                // Screen turned off (lock button or timeout)
                 Intent.ACTION_SCREEN_OFF -> {
-                    if (graceActive) return     // discard stale event fired at startup
-                    stopScreenTimer()
+                    if (graceActive) return
+                    stopMonitorLoop()
                     refreshServiceNotification("Screen OFF – monitoring")
                 }
             }
         }
     }
 
-    // ── Timer helpers ─────────────────────────────────────────────────────────
+    // ── Foreground app detection ──────────────────────────────────────────────
 
     /**
-     * Start (or restart) the 1-second background timer.
-     * Resets elapsedSeconds to 0 every time the screen turns ON.
+     * Returns the package name of the app currently in the foreground.
+     * Returns empty string if permission is not granted or detection fails.
      */
-    private fun startScreenTimer() {
-        stopScreenTimer()           // cancel any pending tick first
-        elapsedSeconds  = 0
-        timerRunning    = true
-        timerHandler.postDelayed(tickRunnable, 1_000)
+    private fun getForegroundApp(): String {
+        return try {
+            val usm = getSystemService(Context.USAGE_STATS_SERVICE) as UsageStatsManager
+            val now = System.currentTimeMillis()
+            // Query last 5 seconds to reliably get the most recently used app
+            val stats = usm.queryUsageStats(UsageStatsManager.INTERVAL_DAILY, now - 5_000, now)
+            stats?.maxByOrNull { it.lastTimeUsed }?.packageName ?: ""
+        } catch (e: Exception) {
+            ""  // fail-safe: treat as unknown
+        }
     }
 
     /**
-     * Stop the timer immediately and reset the counter.
-     * Called when screen turns OFF or the service is destroyed.
+     * Returns true if the package is in the blocked (distraction) app list.
+     * If usage permission is missing (empty package), defaults to TRUE so
+     * monitoring still functions without permission.
      */
-    private fun stopScreenTimer() {
-        timerRunning = false
-        timerHandler.removeCallbacks(tickRunnable)
+    private fun isAppBlocked(packageName: String): Boolean {
+        if (packageName.isEmpty()) return true   // no permission → fail-safe: monitor
+        return packageName in BLOCKED_APPS
+    }
+
+    // ── Monitor loop helpers ──────────────────────────────────────────────────
+
+    /** Begin the 1-second poll loop. Called on screen ON. */
+    private fun startMonitorLoop() {
+        stopMonitorLoop()               // cancel any stale loop first
+        lastForegroundApp = ""          // force re-evaluation on first tick
+        monitorActive = true
+        timerHandler.postDelayed(monitorRunnable, 1_000)
+    }
+
+    /** Stop the poll loop and reset all state. Called on screen OFF / destroy. */
+    private fun stopMonitorLoop() {
+        monitorActive  = false
+        timerRunning   = false
         elapsedSeconds = 0
+        timerHandler.removeCallbacks(monitorRunnable)
     }
 
     // ── Violation event ───────────────────────────────────────────────────────
 
-    /**
-     * Called when elapsedSeconds reaches the threshold.
-     * Fires the violation notification; timer resets and continues automatically.
-     */
     private fun onViolationDetected() {
         violationCounter++
         val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
@@ -125,7 +231,6 @@ class MonitoringService : Service() {
             .setAutoCancel(true)
             .setVibrate(longArrayOf(0, 400, 200, 400))
             .build()
-        // Each violation gets a unique ID so all appear in the notification shade
         nm.notify(2000 + violationCounter, notification)
     }
 
@@ -135,7 +240,6 @@ class MonitoringService : Service() {
         super.onCreate()
         isRunning = true
 
-        // Start background thread for all timer work
         timerThread = HandlerThread("ScreenMonitorTimer").also { it.start() }
         timerHandler = Handler(timerThread.looper)
 
@@ -146,7 +250,6 @@ class MonitoringService : Service() {
             buildServiceNotification("Smart Monitoring Active", "Initialising screen monitor…")
         )
 
-        // Register receiver for screen events
         val filter = IntentFilter().apply {
             addAction(Intent.ACTION_SCREEN_ON)
             addAction(Intent.ACTION_SCREEN_OFF)
@@ -154,11 +257,10 @@ class MonitoringService : Service() {
         }
         registerReceiver(screenReceiver, filter)
 
-        // After 3 s the startup grace period ends; start timer assuming screen is ON
+        // Grace period: 3 s before trusting screen events, then start monitor loop
         Handler(timerThread.looper).postDelayed({
             graceActive = false
-            startScreenTimer()      // screen is ON when the student just opened the app
-            refreshServiceNotification("Screen ON – monitoring active")
+            startMonitorLoop()
         }, 3_000)
     }
 
@@ -186,7 +288,7 @@ class MonitoringService : Service() {
     override fun onDestroy() {
         super.onDestroy()
         isRunning = false
-        stopScreenTimer()
+        stopMonitorLoop()
         timerThread.quitSafely()
         try { unregisterReceiver(screenReceiver) } catch (_: Exception) {}
     }

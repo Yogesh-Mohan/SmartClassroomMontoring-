@@ -66,6 +66,26 @@ class ScreenMonitorService {
     return _isMonitoring;
   }
 
+  /// Check if the app has been granted Usage Access (PACKAGE_USAGE_STATS).
+  /// Required for foreground app detection.
+  Future<bool> hasUsagePermission() async {
+    try {
+      return await _channel.invokeMethod<bool>('hasUsagePermission') ?? false;
+    } on PlatformException {
+      return false;
+    }
+  }
+
+  /// Opens the Android Usage Access settings screen.
+  /// The user must manually toggle the permission for this app.
+  Future<void> requestUsagePermission() async {
+    try {
+      await _channel.invokeMethod('requestUsagePermission');
+    } on PlatformException catch (e) {
+      debugPrint('[Monitor] Could not open usage settings: ${e.message}');
+    }
+  }
+
   bool get isMonitoring => _isMonitoring;
 }
 
