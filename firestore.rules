@@ -34,7 +34,9 @@ service cloud.firestore {
       allow read: if request.auth != null;
       allow write: if false;
     }
-    match /timetables/{docId} {
+    // Timetables — recursive wildcard covers the top-level doc AND
+    // every subcollection at any depth (e.g. wednesday/peroid 0).
+    match /timetables/{document=**} {
       allow read: if request.auth != null;
       allow write: if false;
     }

@@ -86,6 +86,28 @@ class ScreenMonitorService {
     }
   }
 
+  /// Push the current timetable monitoring state to the native service.
+  ///
+  /// Called by [TimetableMonitor] every 15 seconds.
+  /// [active] = true  → inside a class period with monitoring == true
+  /// [active] = false → break time, after hours, or timetable empty
+  Future<void> updateTimetableStatus({required bool active}) async {
+    try {
+      await _channel.invokeMethod('updateTimetableStatus', {'active': active});
+      debugPrint('[Monitor] Timetable status pushed: monitoringActive=$active');
+    } on PlatformException catch (e) {
+      debugPrint('[Monitor] updateTimetableStatus failed: ${e.message}');
+    }
+  }
+
+  /// Push a short debug message to the native side so it can be shown
+  /// in the foreground service notification for diagnostic purposes.
+  Future<void> pushDebugInfo(String info) async {
+    try {
+      await _channel.invokeMethod('updateTimetableDebug', {'info': info});
+    } on PlatformException catch (_) {}
+  }
+
   bool get isMonitoring => _isMonitoring;
 }
 

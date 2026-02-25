@@ -3,6 +3,7 @@ import 'package:google_fonts/google_fonts.dart';
 import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_gradients.dart';
 import '../../services/monitor_service.dart';
+import '../../services/timetable_monitor.dart';
 import 'home/student_home_screen.dart';
 import 'attendance/attendance_screen.dart';
 import 'timetable/timetable_screen.dart';
@@ -22,6 +23,7 @@ class _StudentShellState extends State<StudentShell> {
 
   late final List<Widget> _pages;
   final ScreenMonitorService _monitorService = ScreenMonitorService();
+  final TimetableMonitor     _timetableMonitor = TimetableMonitor();
 
   @override
   void initState() {
@@ -29,7 +31,7 @@ class _StudentShellState extends State<StudentShell> {
     _pages = [
       StudentHomeScreen(studentData: widget.studentData),
       AttendanceScreen(studentData: widget.studentData),
-      const TimetableScreen(),
+      TimetableScreen(studentData: widget.studentData),
       const AlertsScreen(),
       StudentProfileScreen(studentData: widget.studentData),
     ];
@@ -37,7 +39,7 @@ class _StudentShellState extends State<StudentShell> {
     // Start screen monitoring for this student
     _initializeMonitoring();
   }
-
+ 
   Future<void> _initializeMonitoring() async {
     final studentId = widget.studentData['id'] ??
         widget.studentData['registrationNumber'] ?? 'unknown';
@@ -54,6 +56,26 @@ class _StudentShellState extends State<StudentShell> {
     debugPrint(started
         ? 'Screen monitoring started for: $studentName'
         : 'Failed to start screen monitoring');
+
+    if (started) {
+      // Determine student's class for timetable lookup.
+      // 'className' / 'class' / 'section' hold the actual class ID (e.g. CSE_AI_2025).
+      // 'batch' is the admission year range (e.g. 2024-2028) — NOT the timetable key.
+      // We pass ALL candidate values so TimetableMonitor can try each one.
+      final candidates = <String>[
+        if (widget.studentData['className'] != null)
+          widget.studentData['className'].toString(),
+        if (widget.studentData['class'] != null)
+          widget.studentData['class'].toString(),
+        if (widget.studentData['section'] != null)
+          widget.studentData['section'].toString(),
+        if (widget.studentData['course'] != null)
+          widget.studentData['course'].toString(),
+        if (widget.studentData['batch'] != null)
+          widget.studentData['batch'].toString(),
+      ];
+      _timetableMonitor.start(candidates);
+    }
   }
 
   void _showUsagePermissionDialog() {
@@ -87,7 +109,8 @@ class _StudentShellState extends State<StudentShell> {
 
   @override
   void dispose() {
-    // Stop monitoring when student logs out or app closes
+    // Stop timetable monitor first, then the native service
+    _timetableMonitor.stop();
     _monitorService.stopMonitoring();
     super.dispose();
   }

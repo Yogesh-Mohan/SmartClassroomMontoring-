@@ -24,6 +24,20 @@ class MonitoringService : Service() {
 
         @Volatile var isRunning = false
 
+        /**
+         * Timetable gate — set by Flutter (Dart) via MethodChannel.
+         * true  = current time is inside a class period with monitoring == true
+         * false = break time, after hours, or timetable not yet loaded
+         * Default false: monitoring does NOT run until Dart confirms a class period.
+         */
+        @Volatile var monitoringActive = false
+
+        /** Epoch millis of the last updateTimetableStatus call from Dart. */
+        @Volatile var lastTimetablePushMs = 0L
+
+        /** Debug string sent by the Dart TimetableMonitor. */
+        @Volatile var dartDebugInfo = ""
+
         val BLOCKED_APPS: Set<String> = setOf(
             // Social Media
             "com.instagram.android", "com.facebook.katana", "com.facebook.lite",
@@ -64,41 +78,79 @@ class MonitoringService : Service() {
     @Volatile private var isScreenOn     = true
     @Volatile private var elapsedSeconds = 0
     @Volatile private var timerRunning   = false
-    private var violationCounter         = 0
-    private var graceActive              = true
-    private var lastDetectedApp          = "__init__"
 
-    // 1-second tick loop
+    private var violationCounter  = 0
+    private var graceActive       = true
+    private var lastDetectedApp   = "__init__"
+    private var lastMonitorActive = false   // tracks previous monitoringActive state
+    private var tickCount         = 0
+
+    //  1-second tick loop 
     private val tickRunnable = object : Runnable {
         override fun run() {
+            tickCount++
+
             if (!isScreenOn) {
                 timerHandler.postDelayed(this, 1_000)
                 return
             }
 
-            val currentApp = getCurrentForegroundApp()
-            val isBlocked  = isBlockedApp(currentApp)
+            val currentApp    = getCurrentForegroundApp()
+            val isBlocked     = isBlockedApp(currentApp)
+            val timetableOn   = monitoringActive
+            val appChanged    = currentApp != lastDetectedApp
+            val timetableFlip = timetableOn != lastMonitorActive
+            val periodicRefresh = tickCount % 10 == 0  // refresh every 10s
 
-            if (currentApp != lastDetectedApp) {
-                lastDetectedApp = currentApp
-                elapsedSeconds  = 0
-                if (isBlocked) {
-                    timerRunning = true
-                    refreshServiceNotification("Monitoring: 0s / 20s")
-                } else {
-                    timerRunning = false
-                    val label = when {
-                        currentApp.isEmpty() -> "Screen ON - detecting app..."
-                        else -> "System app detected - timer paused"
+            // Handle app switch or timetable state flip (or periodic refresh)
+            if (appChanged || timetableFlip || periodicRefresh) {
+                if (appChanged) {
+                    lastDetectedApp = currentApp
+                    elapsedSeconds  = 0
+                }
+                lastMonitorActive = timetableOn
+
+                when {
+                    // Class in session + blocked app in foreground -> start/resume timer
+                    isBlocked && timetableOn -> {
+                        timerRunning = true
+                        refreshServiceNotification(
+                            "\uD83D\uDD35 Class Time — Monitoring ON",
+                            "Monitoring: ${elapsedSeconds}s / 20s"
+                        )
                     }
-                    refreshServiceNotification(label)
+                    // Blocked app but outside class period -> break time gate
+                    isBlocked && !timetableOn -> {
+                        timerRunning   = false
+                        elapsedSeconds = 0
+                        refreshServiceNotification(
+                            "\uD83D\uDFE0 Break Time",
+                            "Monitoring is OFF during break"
+                        )
+                    }
+                    // Non-blocked (system/study) app -> always pause
+                    else -> {
+                        timerRunning   = false
+                        elapsedSeconds = 0
+                        val body = if (timetableOn)
+                            "Class time — studying detected"
+                        else
+                            "Break time — monitoring OFF"
+                        refreshServiceNotification(
+                            if (timetableOn) "\uD83D\uDD35 Class Time" else "\uD83D\uDFE0 Break Time",
+                            body
+                        )
+                    }
                 }
             }
 
-            if (timerRunning && isBlocked) {
+            // Count seconds: ALL THREE must be true
+            if (timerRunning && isBlocked && timetableOn) {
                 elapsedSeconds++
-                // Show live second-by-second count in notification
-                refreshServiceNotification("Monitoring: ${elapsedSeconds}s / 20s")
+                refreshServiceNotification(
+                    "\uD83D\uDD35 Class Time — Monitoring ON",
+                    "${elapsedSeconds}s / ${VIOLATION_THRESHOLD}s on restricted app"
+                )
                 if (elapsedSeconds >= VIOLATION_THRESHOLD) {
                     fireViolationNotification()
                     elapsedSeconds = 0
@@ -109,7 +161,7 @@ class MonitoringService : Service() {
         }
     }
 
-    // Screen ON / OFF receiver
+    //  Screen ON / OFF receiver 
     private val screenReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
             when (intent.action) {
@@ -119,7 +171,7 @@ class MonitoringService : Service() {
                     elapsedSeconds  = 0
                     lastDetectedApp = "__init__"
                     timerRunning    = false
-                    refreshServiceNotification("Screen ON - detecting app...")
+                    refreshServiceNotification("Smart Classroom", "Screen ON - detecting app...")
                 }
                 Intent.ACTION_SCREEN_OFF -> {
                     if (graceActive) return
@@ -127,17 +179,18 @@ class MonitoringService : Service() {
                     timerRunning    = false
                     elapsedSeconds  = 0
                     lastDetectedApp = "__init__"
-                    refreshServiceNotification("Screen OFF - monitoring paused")
+                    refreshServiceNotification("Smart Classroom", "Screen OFF - monitoring paused")
                 }
             }
         }
     }
 
+    //  Foreground app detection via UsageStatsManager 
     private fun getCurrentForegroundApp(): String {
         return try {
             val usm = getSystemService(Context.USAGE_STATS_SERVICE) as UsageStatsManager
             val now = System.currentTimeMillis()
-            // Query last 20 minutes — catches app even if opened long before service started
+            // 20-minute window: catches app opened before service started
             val events = usm.queryEvents(now - 1_200_000, now)
             val event  = UsageEvents.Event()
             var lastPkg  = ""
@@ -159,6 +212,7 @@ class MonitoringService : Service() {
         return pkg in BLOCKED_APPS
     }
 
+    //  Lifecycle 
     override fun onCreate() {
         super.onCreate()
         isRunning = true
@@ -169,7 +223,7 @@ class MonitoringService : Service() {
         createNotificationChannels()
         startForeground(
             NOTIFICATION_SERVICE_ID,
-            buildServiceNotification("Smart Monitoring Active", "Starting...")
+            buildServiceNotification("Smart Classroom", "Starting...")
         )
 
         val filter = IntentFilter().apply {
@@ -179,7 +233,7 @@ class MonitoringService : Service() {
         }
         registerReceiver(screenReceiver, filter)
 
-        // 1-second grace, then start immediately
+        // 1-second grace, then start tick loop
         timerHandler.postDelayed({
             graceActive = false
             timerHandler.post(tickRunnable)
@@ -211,6 +265,7 @@ class MonitoringService : Service() {
 
     override fun onBind(intent: Intent?): IBinder? = null
 
+    //  Notifications 
     private fun fireViolationNotification() {
         violationCounter++
         val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
@@ -259,9 +314,9 @@ class MonitoringService : Service() {
             .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
             .build()
 
-    private fun refreshServiceNotification(text: String) {
+    private fun refreshServiceNotification(title: String, text: String) {
         val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         nm.notify(NOTIFICATION_SERVICE_ID,
-            buildServiceNotification("Smart Monitoring Active", text))
+            buildServiceNotification(title, text))
     }
 }

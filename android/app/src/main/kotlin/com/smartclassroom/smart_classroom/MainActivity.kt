@@ -47,6 +47,17 @@ class MainActivity : FlutterActivity() {
                         startActivity(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS))
                         result.success(null)
                     }
+                    "updateTimetableStatus" -> {
+                        val active = call.argument<Boolean>("active") ?: false
+                        MonitoringService.monitoringActive = active
+                        MonitoringService.lastTimetablePushMs = System.currentTimeMillis()
+                        result.success(null)
+                    }
+                    "updateTimetableDebug" -> {
+                        val info = call.argument<String>("info") ?: ""
+                        MonitoringService.dartDebugInfo = info
+                        result.success(null)
+                    }
                     else -> result.notImplemented()
                 }
             }
