@@ -41,9 +41,14 @@ class _StudentShellState extends State<StudentShell> {
   }
  
   Future<void> _initializeMonitoring() async {
-    final studentId = widget.studentData['id'] ??
+    final studentId   = widget.studentData['id'] ??
         widget.studentData['registrationNumber'] ?? 'unknown';
     final studentName = widget.studentData['name'] ?? 'Student';
+    final regNo       = (widget.studentData['studentId'] ??
+        widget.studentData['registrationNumber'] ??
+        widget.studentData['regNo'] ??
+        widget.studentData['rollNo'] ??
+        '').toString();
 
     // Check Usage Access permission — needed for foreground app detection.
     // Service still starts in fail-safe mode even without it.
@@ -52,7 +57,11 @@ class _StudentShellState extends State<StudentShell> {
       _showUsagePermissionDialog();
     }
 
-    final started = await _monitorService.startMonitoring(studentId, studentName);
+    final started = await _monitorService.startMonitoring(
+      studentId,
+      studentName,
+      regNo: regNo,
+    );
     debugPrint(started
         ? 'Screen monitoring started for: $studentName'
         : 'Failed to start screen monitoring');

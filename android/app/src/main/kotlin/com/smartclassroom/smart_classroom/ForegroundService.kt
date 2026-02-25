@@ -38,6 +38,15 @@ class MonitoringService : Service() {
         /** Debug string sent by the Dart TimetableMonitor. */
         @Volatile var dartDebugInfo = ""
 
+        /** Current active period doc ID (e.g. "peroid 3") sent by TimetableMonitor. */
+        @Volatile var currentPeriod = ""
+
+        /**
+         * MethodChannel instance held by MainActivity so the service can
+         * send violation events back to Flutter without needing a context reference.
+         */
+        @Volatile var flutterChannel: io.flutter.plugin.common.MethodChannel? = null
+
         val BLOCKED_APPS: Set<String> = setOf(
             // Social Media
             "com.instagram.android", "com.facebook.katana", "com.facebook.lite",
@@ -152,7 +161,7 @@ class MonitoringService : Service() {
                     "${elapsedSeconds}s / ${VIOLATION_THRESHOLD}s on restricted app"
                 )
                 if (elapsedSeconds >= VIOLATION_THRESHOLD) {
-                    fireViolationNotification()
+                    fireViolationNotification(elapsedSeconds)
                     elapsedSeconds = 0
                 }
             }
@@ -266,20 +275,37 @@ class MonitoringService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     //  Notifications 
-    private fun fireViolationNotification() {
+    private fun fireViolationNotification(secondsUsed: Int) {
         violationCounter++
+
+        // 1. Show local notification
         val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         nm.notify(
             2000 + violationCounter,
             NotificationCompat.Builder(this, CHANNEL_VIOLATION)
                 .setSmallIcon(R.mipmap.ic_launcher)
                 .setContentTitle("RULE BROKEN")
-                .setContentText("20 seconds of screen time exceeded! Put your phone down.")
+                .setContentText("${secondsUsed}s of screen time exceeded! Put your phone down.")
                 .setPriority(NotificationCompat.PRIORITY_HIGH)
                 .setAutoCancel(true)
                 .setVibrate(longArrayOf(0, 400, 200, 400))
                 .build()
         )
+
+        // 2. Callback Flutter so it can save to Firestore
+        val channel = flutterChannel
+        if (channel != null) {
+            val args = mapOf(
+                "secondsUsed" to secondsUsed,
+                "period"      to currentPeriod
+            )
+            // Must run on the main thread for Flutter MethodChannel
+            android.os.Handler(android.os.Looper.getMainLooper()).post {
+                channel.invokeMethod("onViolation", args)
+            }
+        } else {
+            android.util.Log.w("MonitoringService", "flutterChannel is null — violation NOT sent to Flutter")
+        }
     }
 
     private fun createNotificationChannels() {

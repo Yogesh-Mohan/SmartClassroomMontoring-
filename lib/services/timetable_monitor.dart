@@ -62,9 +62,12 @@ class TimetableMonitor {
 
   Future<void> _checkAndPush(List<String> candidates) async {
     final result = await _isMonitoringActive(candidates);
-    await _monitor.updateTimetableStatus(active: result.active);
+    await _monitor.updateTimetableStatus(
+      active: result.active,
+      period: result.periodName,
+    );
     await _monitor.pushDebugInfo(result.debugMsg);
-    debugPrint('[Timetable] pushed: active=${result.active}, debug=${result.debugMsg}');
+    debugPrint('[Timetable] pushed: active=${result.active}, period=${result.periodName}, debug=${result.debugMsg}');
   }
 
   Future<_TimetableResult> _isMonitoringActive(List<String> candidates) async {
@@ -141,10 +144,18 @@ class TimetableMonitor {
             'start=$startTime end=$endTime inRange=$inRange');
 
         if (inRange && monitoring) {
-          return _TimetableResult(true, 'CLASS:$cls/${doc.id} ($startTime-$endTime)');
+          return _TimetableResult(
+            true,
+            'CLASS:$cls/${doc.id} ($startTime-$endTime)',
+            periodName: doc.id,
+          );
         }
         if (inRange && !monitoring) {
-          return _TimetableResult(false, 'BREAK:$cls/${doc.id} ($startTime-$endTime)');
+          return _TimetableResult(
+            false,
+            'BREAK:$cls/${doc.id} ($startTime-$endTime)',
+            periodName: doc.id,
+          );
         }
       }
 
@@ -170,5 +181,6 @@ class TimetableMonitor {
 class _TimetableResult {
   final bool active;
   final String debugMsg;
-  const _TimetableResult(this.active, this.debugMsg);
+  final String periodName;   // e.g. "peroid 3" — the Firestore doc ID
+  const _TimetableResult(this.active, this.debugMsg, {this.periodName = ''});
 }

@@ -25,8 +25,12 @@ class MainActivity : FlutterActivity() {
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
 
-        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, channel)
-            .setMethodCallHandler { call, result ->
+        val methodChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, channel)
+
+        // Store channel so ForegroundService can callback Flutter on violation
+        MonitoringService.flutterChannel = methodChannel
+
+        methodChannel.setMethodCallHandler { call, result ->
                 when (call.method) {
                     "startMonitoring" -> {
                         startNativeService()
@@ -49,8 +53,12 @@ class MainActivity : FlutterActivity() {
                     }
                     "updateTimetableStatus" -> {
                         val active = call.argument<Boolean>("active") ?: false
+                        val period = call.argument<String>("period") ?: ""
                         MonitoringService.monitoringActive = active
                         MonitoringService.lastTimetablePushMs = System.currentTimeMillis()
+                        if (period.isNotEmpty()) {
+                            MonitoringService.currentPeriod = period
+                        }
                         result.success(null)
                     }
                     "updateTimetableDebug" -> {
