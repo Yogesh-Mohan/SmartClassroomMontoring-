@@ -1,6 +1,8 @@
-﻿import 'package:cloud_firestore/cloud_firestore.dart';
+﻿import 'dart:convert';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:http/http.dart' as http;
 import 'notification_service.dart';
 
 /// ScreenMonitorService — Flutter-side controller for the native MonitoringService.
@@ -36,8 +38,8 @@ class ScreenMonitorService {
     }
   }
 
-  /// Save violation document to Firestore violations collection,
-  /// then retrieve the admin FCM token for push notification.
+  /// Save violation document to Firestore violations collection.
+  /// Then send push notification directly to admin device.
   Future<void> _saveViolationToFirestore({
     required int secondsUsed,
     required String period,
@@ -51,47 +53,116 @@ class ScreenMonitorService {
         'period'      : period,
         'timestamp'   : FieldValue.serverTimestamp(),
       });
-      debugPrint('[Monitor] Violation saved: student=$_studentName period=$period seconds=$secondsUsed');
+      debugPrint('[Monitor] ✅ Violation saved: student=$_studentName period=$period seconds=$secondsUsed');
 
-      // After violation saved → retrieve admin FCM token
+      // Get admin FCM token and send notification
       final adminToken = await _getAdminFcmToken();
       if (adminToken != null && adminToken.isNotEmpty) {
-        debugPrint('[Monitor] Admin FCM Token retrieved: $adminToken');
-        // adminToken is ready → Step 4: send push notification here
+        debugPrint('[Monitor] Admin FCM Token retrieved: ${adminToken.substring(0, 20)}...');
+        await _sendPushNotification(
+          token: adminToken,
+          title: '🔔 Violation Detected!',
+          body: '$_studentName - $period - ${secondsUsed}s phone usage',
+        );
       } else {
-        debugPrint('[Monitor] Admin FCM Token not found or empty');
+        debugPrint('[Monitor] ⚠️ Admin FCM Token not found or empty');
       }
     } catch (e) {
-      debugPrint('[Monitor] Failed to save violation: $e');
+      debugPrint('[Monitor] ❌ Failed to save violation: $e');
     }
   }
 
   /// Retrieve the admin device FCM token from Firestore admins collection.
-  /// Returns the token string, or null if not found.
   Future<String?> _getAdminFcmToken() async {
     try {
-      // Try: any admin document that has a non-empty fcmToken
+      debugPrint('[Monitor] Fetching admin FCM token from Firestore...');
+      
       final snapshot = await FirebaseFirestore.instance
           .collection('admins')
-          .where('fcmToken', isNotEqualTo: '')
-          .limit(1)
           .get();
 
       if (snapshot.docs.isEmpty) {
-        debugPrint('[Monitor] No admin with fcmToken found');
+        debugPrint('[Monitor] No admin documents found in Firestore');
         return null;
       }
 
-      final token = snapshot.docs.first.data()['fcmToken'] as String?;
-      if (token == null || token.isEmpty) {
-        debugPrint('[Monitor] fcmToken field is null or empty');
-        return null;
+      debugPrint('[Monitor] Found ${snapshot.docs.length} admin document(s)');
+
+      // Find first admin with a valid fcmToken
+      for (final doc in snapshot.docs) {
+        final data = doc.data();
+        final token = data['fcmToken'] as String?;
+        
+        if (token != null && token.isNotEmpty) {
+          debugPrint('[Monitor] ✅ Admin FCM Token found');
+          return token;
+        }
       }
 
-      return token;
-    } catch (e) {
-      debugPrint('[Monitor] Error retrieving admin FCM token: $e');
+      debugPrint('[Monitor] ❌ No admin with valid fcmToken found');
       return null;
+    } catch (e) {
+      debugPrint('[Monitor] ❌ Error retrieving admin FCM token: $e');
+      return null;
+    }
+  }
+
+  /// Send push notification to admin device via backend server.
+  Future<void> _sendPushNotification({
+    required String token,
+    required String title,
+    required String body,
+  }) async {
+    if (token.isEmpty) {
+      debugPrint('[FCM] ❌ Token is empty, skipping send');
+      return;
+    }
+
+    debugPrint('[FCM] 📤 Sending notification to admin...');
+    debugPrint('[FCM] Title: $title');
+    debugPrint('[FCM] Body: $body');
+
+    // TODO: Replace with your Render.com backend URL after deployment
+    const backendUrl = 'YOUR_RENDER_URL_HERE/send-notification';
+    // Example: 'https://smart-classroom-notifications.onrender.com/send-notification'
+
+    final payload = {
+      'fcmToken': token,
+      'title': title,
+      'body': body,
+      'data': {
+        'type': 'violation',
+        'timestamp': DateTime.now().toIso8601String(),
+      },
+    };
+
+    try {
+      debugPrint('[FCM] Making HTTP POST request to backend...');
+      
+      final response = await http.post(
+        Uri.parse(backendUrl),
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: json.encode(payload),
+      );
+
+      debugPrint('[FCM] Response Status: ${response.statusCode}');
+      debugPrint('[FCM] Response Body: ${response.body}');
+
+      if (response.statusCode == 200) {
+        final responseData = json.decode(response.body);
+        if (responseData['success'] == true) {
+          debugPrint('[FCM] ✅ Push notification sent successfully!');
+          debugPrint('[FCM] Message ID: ${responseData['messageId']}');
+        } else {
+          debugPrint('[FCM] ❌ Backend returned error: ${responseData['error']}');
+        }
+      } else {
+        debugPrint('[FCM] ❌ Failed to send notification. Status: ${response.statusCode}');
+      }
+    } catch (e) {
+      debugPrint('[FCM] ❌ Exception while sending push notification: $e');
     }
   }
 
