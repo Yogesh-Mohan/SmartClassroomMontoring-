@@ -1,5 +1,9 @@
 import 'dart:ui';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../../core/theme/app_colors.dart';
@@ -32,6 +36,11 @@ class _AdminLoginScreenState extends State<AdminLoginScreen> {
       final data = await AdminAuthService.signIn(email, password);
       if (!mounted) return;
       setState(() => _loading = false);
+
+      // Request notification permission and retrieve FCM token
+      await _retrieveFcmToken();
+      if (!mounted) return;
+
       Navigator.of(context).pushAndRemoveUntil(
         PageRouteBuilder(
           pageBuilder: (_, _, _) => AdminShell(adminData: data!),
@@ -49,6 +58,107 @@ class _AdminLoginScreenState extends State<AdminLoginScreen> {
     }
   }
 
+  Future<void> _retrieveFcmToken() async {
+    try {
+      final messaging = FirebaseMessaging.instance;
+
+      // Request permission (required on iOS; harmless on Android)
+      final settings = await messaging.requestPermission(
+        alert: true,
+        badge: true,
+        sound: true,
+      );
+
+      if (settings.authorizationStatus == AuthorizationStatus.denied) {
+        debugPrint('Admin FCM: notification permission denied');
+        return;
+      }
+
+      final token = await messaging.getToken();
+      if (token != null) {
+        debugPrint('Admin FCM Token: $token');
+
+        // Save token to Firestore admins/{uid} → fcmToken field
+        await _saveFcmTokenToFirestore(token);
+
+        if (!mounted) return;
+        await _showFcmTokenDialog(token);
+      } else {
+        debugPrint('Admin FCM: token is null');
+      }
+    } catch (e) {
+      debugPrint('Admin FCM: error retrieving token — $e');
+    }
+  }
+
+  /// Save the FCM token to the admin's Firestore document.
+  Future<void> _saveFcmTokenToFirestore(String token) async {
+    try {
+      final uid = FirebaseAuth.instance.currentUser?.uid;
+      if (uid == null) {
+        debugPrint('Admin FCM Save: no current user UID');
+        return;
+      }
+      await FirebaseFirestore.instance
+          .collection('admins')
+          .doc(uid)
+          .update({'fcmToken': token});
+      debugPrint('Admin FCM Save: token saved to admins/$uid');
+    } catch (e) {
+      debugPrint('Admin FCM Save: error — $e');
+    }
+  }
+
+  Future<void> _showFcmTokenDialog(String token) async {
+    await showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF0D1B3E),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: Text(
+          '📋 Admin FCM Token',
+          style: GoogleFonts.poppins(
+            color: Colors.white, fontWeight: FontWeight.w600, fontSize: 16),
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.white10,
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: SelectableText(
+                token,
+                style: GoogleFonts.sourceCodePro(
+                  color: Colors.lightBlueAccent, fontSize: 11),
+              ),
+            ),
+            const SizedBox(height: 12),
+            TextButton.icon(
+              onPressed: () {
+                Clipboard.setData(ClipboardData(text: token));
+                Navigator.pop(ctx);
+                _showSuccessSnack('FCM token copied to clipboard!');
+              },
+              icon: const Icon(Icons.copy, size: 16, color: Colors.white70),
+              label: Text('Copy Token',
+                  style: GoogleFonts.poppins(color: Colors.white70)),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: Text('Close',
+                style: GoogleFonts.poppins(color: AppColors.cyan)),
+          ),
+        ],
+      ),
+    );
+  }
+
   void _showSnack(String msg) {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
@@ -61,54 +171,102 @@ class _AdminLoginScreenState extends State<AdminLoginScreen> {
     );
   }
 
-  void _showForgotPassword() {
-    final ctrl = TextEditingController();
-    showDialog(
-      context: context,
-      builder: (_) => AlertDialog(
-        backgroundColor: const Color(0xFF0D1B3E),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        title: Text('Reset Password',
-            style: GoogleFonts.poppins(
-                color: Colors.white, fontWeight: FontWeight.w600)),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
+  void _showSuccessSnack(String msg) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Row(
           children: [
-            Text('Enter your registered admin email to receive a reset link.',
-                style: GoogleFonts.poppins(
-                    fontSize: 13, color: AppColors.textSecondary)),
-            const SizedBox(height: 16),
-            TextField(
-              controller: ctrl,
-              keyboardType: TextInputType.emailAddress,
-              style: const TextStyle(color: Colors.white),
-              decoration: const InputDecoration(
-                labelText: 'Admin Email',
-                prefixIcon: Icon(Icons.email_outlined),
-              ),
-            ),
+            const Icon(Icons.check_circle_outline, color: Colors.white, size: 18),
+            const SizedBox(width: 8),
+            Expanded(child: Text(msg, style: GoogleFonts.poppins(fontSize: 13))),
           ],
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: Text('Cancel',
-                style: GoogleFonts.poppins(color: AppColors.textSecondary)),
-          ),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(
-              backgroundColor: AppColors.success,
-              shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12)),
+        backgroundColor: AppColors.success,
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        margin: const EdgeInsets.all(16),
+        duration: const Duration(seconds: 4),
+      ),
+    );
+  }
+  void _showForgotPassword() {
+    final ctrl = TextEditingController(
+      text: _emailController.text.trim(),
+    );
+    bool sending = false;
+    showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) {
+          return AlertDialog(
+            backgroundColor: const Color(0xFF0D1B3E),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+            title: Text('Reset Password',
+                style: GoogleFonts.poppins(
+                    color: Colors.white, fontWeight: FontWeight.w600)),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text('Enter your registered admin email to receive a reset link.',
+                    style: GoogleFonts.poppins(
+                        fontSize: 13, color: AppColors.textSecondary)),
+                const SizedBox(height: 16),
+                TextField(
+                  controller: ctrl,
+                  keyboardType: TextInputType.emailAddress,
+                  style: const TextStyle(color: Colors.white),
+                  decoration: const InputDecoration(
+                    labelText: 'Admin Email',
+                    prefixIcon: Icon(Icons.email_outlined),
+                  ),
+                ),
+              ],
             ),
-            onPressed: () {
-              Navigator.pop(context);
-              _showSnack('Reset link sent! Check your inbox.');
-            },
-            child: Text('Send',
-                style: GoogleFonts.poppins(color: Colors.white)),
-          ),
-        ],
+            actions: [
+              TextButton(
+                onPressed: sending ? null : () => Navigator.pop(ctx),
+                child: Text('Cancel',
+                    style: GoogleFonts.poppins(color: AppColors.textSecondary)),
+              ),
+              ElevatedButton(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: AppColors.success,
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12)),
+                ),
+                onPressed: sending
+                    ? null
+                    : () async {
+                        final email = ctrl.text.trim();
+                        if (email.isEmpty) return;
+                        setDialogState(() => sending = true);
+                        try {
+                          await FirebaseAuth.instance
+                              .sendPasswordResetEmail(email: email);
+                          if (ctx.mounted) Navigator.pop(ctx);
+                          _showSuccessSnack('Reset link sent! Check your inbox.');
+                        } on FirebaseAuthException catch (e) {
+                          setDialogState(() => sending = false);
+                          final msg = e.code == 'user-not-found'
+                              ? 'No account found for that email.'
+                              : e.message ?? 'Failed to send reset email.';
+                          _showSnack(msg);
+                        } catch (_) {
+                          setDialogState(() => sending = false);
+                          _showSnack('Failed to send reset email. Try again.');
+                        }
+                      },
+                child: sending
+                    ? const SizedBox(
+                        width: 18, height: 18,
+                        child: CircularProgressIndicator(
+                            strokeWidth: 2, color: Colors.white))
+                    : Text('Send',
+                        style: GoogleFonts.poppins(color: Colors.white)),
+              ),
+            ],
+          );
+        },
       ),
     );
   }

@@ -36,7 +36,8 @@ class ScreenMonitorService {
     }
   }
 
-  /// Save violation document to Firestore violations collection
+  /// Save violation document to Firestore violations collection,
+  /// then retrieve the admin FCM token for push notification.
   Future<void> _saveViolationToFirestore({
     required int secondsUsed,
     required String period,
@@ -51,8 +52,46 @@ class ScreenMonitorService {
         'timestamp'   : FieldValue.serverTimestamp(),
       });
       debugPrint('[Monitor] Violation saved: student=$_studentName period=$period seconds=$secondsUsed');
+
+      // After violation saved → retrieve admin FCM token
+      final adminToken = await _getAdminFcmToken();
+      if (adminToken != null && adminToken.isNotEmpty) {
+        debugPrint('[Monitor] Admin FCM Token retrieved: $adminToken');
+        // adminToken is ready → Step 4: send push notification here
+      } else {
+        debugPrint('[Monitor] Admin FCM Token not found or empty');
+      }
     } catch (e) {
       debugPrint('[Monitor] Failed to save violation: $e');
+    }
+  }
+
+  /// Retrieve the admin device FCM token from Firestore admins collection.
+  /// Returns the token string, or null if not found.
+  Future<String?> _getAdminFcmToken() async {
+    try {
+      // Try: any admin document that has a non-empty fcmToken
+      final snapshot = await FirebaseFirestore.instance
+          .collection('admins')
+          .where('fcmToken', isNotEqualTo: '')
+          .limit(1)
+          .get();
+
+      if (snapshot.docs.isEmpty) {
+        debugPrint('[Monitor] No admin with fcmToken found');
+        return null;
+      }
+
+      final token = snapshot.docs.first.data()['fcmToken'] as String?;
+      if (token == null || token.isEmpty) {
+        debugPrint('[Monitor] fcmToken field is null or empty');
+        return null;
+      }
+
+      return token;
+    } catch (e) {
+      debugPrint('[Monitor] Error retrieving admin FCM token: $e');
+      return null;
     }
   }
 

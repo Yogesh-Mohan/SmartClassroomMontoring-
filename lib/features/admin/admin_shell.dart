@@ -6,6 +6,7 @@ import 'home/admin_home_screen.dart';
 import 'monitoring/monitoring_screen.dart';
 import 'notification/notification_screen.dart';
 import 'profile/admin_profile_screen.dart';
+import 'violations/violations_screen.dart';
 
 class AdminShell extends StatefulWidget {
   final Map<String, dynamic> adminData;
@@ -26,16 +27,18 @@ class _AdminShellState extends State<AdminShell> {
     _pages = [
       AdminHomeScreen(adminData: widget.adminData),
       const MonitoringScreen(),
+      const AdminViolationsScreen(),
       const NotificationScreen(),
       AdminProfileScreen(adminData: widget.adminData),
     ];
   }
 
   static const _navItems = [
-    _NavItem(Icons.dashboard_rounded, Icons.dashboard_outlined, 'Dashboard'),
-    _NavItem(Icons.monitor_heart_rounded, Icons.monitor_heart_outlined, 'Monitoring'),
-    _NavItem(Icons.notifications_rounded, Icons.notifications_outlined, 'Alerts'),
-    _NavItem(Icons.person_rounded, Icons.person_outlined, 'Profile'),
+    _NavItem(Icons.dashboard_rounded,      Icons.dashboard_outlined,       'Dashboard'),
+    _NavItem(Icons.monitor_heart_rounded,  Icons.monitor_heart_outlined,   'Monitoring'),
+    _NavItem(Icons.warning_amber_rounded,  Icons.warning_amber_outlined,   'Violations'),
+    _NavItem(Icons.notifications_rounded,  Icons.notifications_outlined,   'Alerts'),
+    _NavItem(Icons.person_rounded,         Icons.person_outlined,          'Profile'),
   ];
 
   @override

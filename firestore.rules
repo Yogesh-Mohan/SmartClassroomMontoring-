@@ -51,6 +51,11 @@ service cloud.firestore {
       allow update, delete: if false;
     }
 
+    // ── FCM TOKENS ───────────────────────────────────────────────────────────
+    match /fcmTokens/{docId} {
+      allow read, write: if request.auth != null;
+    }
+
     // ── BLOCK EVERYTHING ELSE ────────────────────────────────────────────────
     match /{document=**} {
       allow read, write: if false;

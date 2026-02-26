@@ -1,4 +1,5 @@
 import 'dart:ui';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -62,54 +63,102 @@ class _StudentLoginScreenState extends State<StudentLoginScreen> {
     );
   }
 
-  void _showForgotPassword() {
-    final ctrl = TextEditingController();
-    showDialog(
-      context: context,
-      builder: (_) => AlertDialog(
-        backgroundColor: const Color(0xFF0D1B3E),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        title: Text('Reset Password',
-            style: GoogleFonts.poppins(
-                color: Colors.white, fontWeight: FontWeight.w600)),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
+  void _showSuccessSnack(String msg) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Row(
           children: [
-            Text('Enter your registered email to receive a reset link.',
-                style: GoogleFonts.poppins(
-                    fontSize: 13, color: AppColors.textSecondary)),
-            const SizedBox(height: 16),
-            TextField(
-              controller: ctrl,
-              keyboardType: TextInputType.emailAddress,
-              style: const TextStyle(color: Colors.white),
-              decoration: const InputDecoration(
-                labelText: 'Email',
-                prefixIcon: Icon(Icons.email_outlined),
-              ),
-            ),
+            const Icon(Icons.check_circle_outline, color: Colors.white, size: 18),
+            const SizedBox(width: 8),
+            Expanded(child: Text(msg, style: GoogleFonts.poppins(fontSize: 13))),
           ],
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: Text('Cancel',
-                style: GoogleFonts.poppins(color: AppColors.textSecondary)),
-          ),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(
-              backgroundColor: AppColors.lightBlue,
-              shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12)),
+        backgroundColor: AppColors.success,
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        margin: const EdgeInsets.all(16),
+        duration: const Duration(seconds: 4),
+      ),
+    );
+  }
+  void _showForgotPassword() {
+    final ctrl = TextEditingController(
+      text: _emailController.text.trim(),
+    );
+    bool sending = false;
+    showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) {
+          return AlertDialog(
+            backgroundColor: const Color(0xFF0D1B3E),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+            title: Text('Reset Password',
+                style: GoogleFonts.poppins(
+                    color: Colors.white, fontWeight: FontWeight.w600)),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text('Enter your registered email to receive a reset link.',
+                    style: GoogleFonts.poppins(
+                        fontSize: 13, color: AppColors.textSecondary)),
+                const SizedBox(height: 16),
+                TextField(
+                  controller: ctrl,
+                  keyboardType: TextInputType.emailAddress,
+                  style: const TextStyle(color: Colors.white),
+                  decoration: const InputDecoration(
+                    labelText: 'Email',
+                    prefixIcon: Icon(Icons.email_outlined),
+                  ),
+                ),
+              ],
             ),
-            onPressed: () {
-              Navigator.pop(context);
-              _showSnack('Reset link sent! Check your inbox.');
-            },
-            child: Text('Send',
-                style: GoogleFonts.poppins(color: Colors.white)),
-          ),
-        ],
+            actions: [
+              TextButton(
+                onPressed: sending ? null : () => Navigator.pop(ctx),
+                child: Text('Cancel',
+                    style: GoogleFonts.poppins(color: AppColors.textSecondary)),
+              ),
+              ElevatedButton(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: AppColors.lightBlue,
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12)),
+                ),
+                onPressed: sending
+                    ? null
+                    : () async {
+                        final email = ctrl.text.trim();
+                        if (email.isEmpty) return;
+                        setDialogState(() => sending = true);
+                        try {
+                          await FirebaseAuth.instance
+                              .sendPasswordResetEmail(email: email);
+                          if (ctx.mounted) Navigator.pop(ctx);
+                          _showSuccessSnack('Reset link sent! Check your inbox.');
+                        } on FirebaseAuthException catch (e) {
+                          setDialogState(() => sending = false);
+                          final msg = e.code == 'user-not-found'
+                              ? 'No account found for that email.'
+                              : e.message ?? 'Failed to send reset email.';
+                          _showSnack(msg);
+                        } catch (_) {
+                          setDialogState(() => sending = false);
+                          _showSnack('Failed to send reset email. Try again.');
+                        }
+                      },
+                child: sending
+                    ? const SizedBox(
+                        width: 18, height: 18,
+                        child: CircularProgressIndicator(
+                            strokeWidth: 2, color: Colors.white))
+                    : Text('Send',
+                        style: GoogleFonts.poppins(color: Colors.white)),
+              ),
+            ],
+          );
+        },
       ),
     );
   }
