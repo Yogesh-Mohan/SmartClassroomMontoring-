@@ -3,7 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'firebase_options.dart';
 import 'core/theme/app_theme.dart';
-import 'features/role_select/role_select_screen.dart';
+import 'features/auth/auth_gate.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -30,7 +30,7 @@ class SmartClassroomApp extends StatelessWidget {
       title: 'Smart Classroom Monitoring',
       debugShowCheckedModeBanner: false,
       theme: AppTheme.theme,
-      home: const RoleSelectScreen(),
+      home: const AuthGate(),
       builder: (context, child) {
         return MediaQuery(
           data: MediaQuery.of(context).copyWith(textScaler: TextScaler.noScaling),

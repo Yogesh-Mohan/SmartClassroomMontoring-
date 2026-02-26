@@ -80,9 +80,6 @@ class _AdminLoginScreenState extends State<AdminLoginScreen> {
 
         // Save token to Firestore admins/{uid} → fcmToken field
         await _saveFcmTokenToFirestore(token);
-
-        if (!mounted) return;
-        await _showFcmTokenDialog(token);
       } else {
         debugPrint('Admin FCM: token is null');
       }
@@ -107,56 +104,6 @@ class _AdminLoginScreenState extends State<AdminLoginScreen> {
     } catch (e) {
       debugPrint('Admin FCM Save: error — $e');
     }
-  }
-
-  Future<void> _showFcmTokenDialog(String token) async {
-    await showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: const Color(0xFF0D1B3E),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        title: Text(
-          '📋 Admin FCM Token',
-          style: GoogleFonts.poppins(
-            color: Colors.white, fontWeight: FontWeight.w600, fontSize: 16),
-        ),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Container(
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: Colors.white10,
-                borderRadius: BorderRadius.circular(12),
-              ),
-              child: SelectableText(
-                token,
-                style: GoogleFonts.sourceCodePro(
-                  color: Colors.lightBlueAccent, fontSize: 11),
-              ),
-            ),
-            const SizedBox(height: 12),
-            TextButton.icon(
-              onPressed: () {
-                Clipboard.setData(ClipboardData(text: token));
-                Navigator.pop(ctx);
-                _showSuccessSnack('FCM token copied to clipboard!');
-              },
-              icon: const Icon(Icons.copy, size: 16, color: Colors.white70),
-              label: Text('Copy Token',
-                  style: GoogleFonts.poppins(color: Colors.white70)),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: Text('Close',
-                style: GoogleFonts.poppins(color: AppColors.cyan)),
-          ),
-        ],
-      ),
-    );
   }
 
   void _showSnack(String msg) {
