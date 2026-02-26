@@ -122,9 +122,9 @@ class ScreenMonitorService {
     debugPrint('[FCM] Title: $title');
     debugPrint('[FCM] Body: $body');
 
-    // TODO: Replace with your Render.com backend URL after deployment
-    const backendUrl = 'YOUR_RENDER_URL_HERE/send-notification';
-    // Example: 'https://smart-classroom-notifications.onrender.com/send-notification'
+    // Backend endpoint to send notification via Render server
+    const backendUrl =
+      'https://smartclassroommontoring-system.onrender.com/send-notification';
 
     final payload = {
       'fcmToken': token,

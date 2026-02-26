@@ -1,3 +1,6 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../../core/theme/app_colors.dart';
@@ -31,6 +34,34 @@ class _AdminShellState extends State<AdminShell> {
       const NotificationScreen(),
       AdminProfileScreen(adminData: widget.adminData),
     ];
+    _setupFcmTokenRefreshListener();
+  }
+
+  /// Listen for FCM token changes and automatically update Firestore.
+  /// This fixes the issue where token changes every time admin logs in.
+  void _setupFcmTokenRefreshListener() {
+    FirebaseMessaging.instance.onTokenRefresh.listen((newToken) async {
+      debugPrint('[Admin FCM] Token refreshed: $newToken');
+      await _saveFcmTokenToFirestore(newToken);
+    });
+  }
+
+  /// Save FCM token to Firestore admins/{uid} document.
+  Future<void> _saveFcmTokenToFirestore(String token) async {
+    try {
+      final uid = FirebaseAuth.instance.currentUser?.uid;
+      if (uid == null) {
+        debugPrint('[Admin FCM] Save failed: no current user UID');
+        return;
+      }
+      await FirebaseFirestore.instance
+          .collection('admins')
+          .doc(uid)
+          .set({'fcmToken': token}, SetOptions(merge: true));
+      debugPrint('[Admin FCM] Token saved to Firestore: admins/$uid');
+    } catch (e) {
+      debugPrint('[Admin FCM] Save error: $e');
+    }
   }
 
   static const _navItems = [
