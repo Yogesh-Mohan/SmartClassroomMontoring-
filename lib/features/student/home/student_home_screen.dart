@@ -21,6 +21,8 @@ class StudentHomeScreen extends StatefulWidget {
 }
 
 class _StudentHomeScreenState extends State<StudentHomeScreen> {
+  static const int _violationAlertThreshold = 10;
+
   late final TasksService _tasksService;
   late final ViolationsStatsService _violationsService;
   late final TimetableService _timetableService;
@@ -222,6 +224,54 @@ class _StudentHomeScreenState extends State<StudentHomeScreen> {
             ).animate().fadeIn(delay: 150.ms),
 
             const SizedBox(height: 16),
+
+            // 🚨 High-violation alert: shown when today's violations reach 10+
+            StreamBuilder<int>(
+              stream: _violationsService.streamTodayViolations(_studentUID),
+              builder: (context, snapshot) {
+                final count = snapshot.data ?? 0;
+                if (count < _violationAlertThreshold) return const SizedBox.shrink();
+                return Padding(
+                  padding: const EdgeInsets.only(bottom: 16),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                    decoration: BoxDecoration(
+                      color: AppColors.danger.withValues(alpha: 0.15),
+                      borderRadius: BorderRadius.circular(14),
+                      border: Border.all(color: AppColors.danger.withValues(alpha: 0.5), width: 1.5),
+                    ),
+                    child: Row(
+                      children: [
+                        const Icon(Icons.warning_rounded, color: AppColors.danger, size: 24),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                '⚠️ Alert: $count Rule Violations Today!',
+                                style: GoogleFonts.poppins(
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w600,
+                                  color: AppColors.danger,
+                                ),
+                              ),
+                              Text(
+                                'You have broken the phone rule $count times today. Please follow the classroom rules.',
+                                style: GoogleFonts.poppins(
+                                  fontSize: 11,
+                                  color: Colors.white70,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ).animate().fadeIn().shake(),
+                );
+              },
+            ),
 
             // Quick Access to Tasks
             GestureDetector(
@@ -481,18 +531,20 @@ class _StudentHomeScreenState extends State<StudentHomeScreen> {
         }
 
         final schedule = snapshot.data!;
-        final hour = DateTime.now().hour;
-        final isMorning = hour < 13; // Before 1 PM is morning
+        final now = DateTime.now();
+        final nowMinutes = now.hour * 60 + now.minute;
+        final lunchMinutes = schedule.lunchBreakTime.hour * 60 + schedule.lunchBreakTime.minute;
+        final isMorning = nowMinutes < lunchMinutes; // Before actual lunch break
 
         final periodsToShow = isMorning ? schedule.morning : schedule.afternoon;
-        final title = isMorning ? "Morning Classes" : "Afternoon Classes";
+        final title = isMorning ? 'Before Lunch' : 'After Lunch';
 
         if (schedule.isEmpty) {
           return _buildEmptySchedule("No classes scheduled for today!");
         }
         
         if (periodsToShow.isEmpty) {
-          return _buildEmptySchedule(isMorning ? "No more classes this morning." : "No classes scheduled this afternoon.");
+          return _buildEmptySchedule(isMorning ? 'No more classes before lunch.' : 'No classes scheduled after lunch.');
         }
 
         return Column(

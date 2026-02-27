@@ -7,7 +7,14 @@ class DailySchedule {
   final List<Period> morning;
   final List<Period> afternoon;
 
-  DailySchedule({required this.morning, required this.afternoon});
+  /// The detected lunch break start time (from Firestore break period or default 1 PM)
+  final TimeOfDay lunchBreakTime;
+
+  DailySchedule({
+    required this.morning,
+    required this.afternoon,
+    this.lunchBreakTime = const TimeOfDay(hour: 13, minute: 0),
+  });
 
   bool get isEmpty => morning.isEmpty && afternoon.isEmpty;
 }
@@ -77,9 +84,9 @@ class TimetableService {
         return DailySchedule(morning: [], afternoon: []);
       }
 
-      final periods = snapshot.docs
+      // Fetch ALL periods (including breaks) to detect the actual lunch break time
+      final allPeriods = snapshot.docs
           .map((doc) => Period.fromFirestore(doc))
-          .where((period) => !period.isBreak && period.isMonitoring) // Filter out breaks
           .toList()
         ..sort((a, b) {
           final aMin = (a.startTime.hour * 60) + a.startTime.minute;
@@ -87,10 +94,27 @@ class TimetableService {
           return aMin.compareTo(bMin);
         });
 
+      // Detect actual lunch break: first break period between 11 AM – 2 PM (exclusive)
+      TimeOfDay detectedLunch = lunchStartTime;
+      for (final period in allPeriods) {
+        if (period.isBreak || !period.isMonitoring) {
+          final h = period.startTime.hour;
+          if (h >= 11 && h < 14) {
+            detectedLunch = period.startTime;
+            break;
+          }
+        }
+      }
+
+      // Only class (monitoring) periods go into the display list
+      final periods = allPeriods
+          .where((p) => !p.isBreak && p.isMonitoring)
+          .toList();
+
+      final lunchTime = detectedLunch.hour + (detectedLunch.minute / 60.0);
       for (final period in periods) {
         // Convert TimeOfDay to a comparable number (e.g., 13:30 -> 13.5)
         final periodStartTime = period.startTime.hour + (period.startTime.minute / 60.0);
-        final lunchTime = lunchStartTime.hour + (lunchStartTime.minute / 60.0);
 
         if (periodStartTime < lunchTime) {
           morningPeriods.add(period);
@@ -102,6 +126,7 @@ class TimetableService {
       return DailySchedule(
         morning: morningPeriods,
         afternoon: afternoonPeriods,
+        lunchBreakTime: detectedLunch,
       );
     } catch (e) {
       // Handle potential errors like permission issues or network problems
