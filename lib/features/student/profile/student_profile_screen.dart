@@ -1,18 +1,32 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:image_picker/image_picker.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/theme/app_gradients.dart';
+import '../../../services/cloudinary_service.dart';
 import '../../auth/student_auth_service.dart';
 import '../../role_select/role_select_screen.dart';
 import '../student_profile_service.dart';
 
-class StudentProfileScreen extends StatelessWidget {
+class StudentProfileScreen extends StatefulWidget {
   final Map<String, dynamic> studentData;
   const StudentProfileScreen({super.key, required this.studentData});
 
+  @override
+  State<StudentProfileScreen> createState() => _StudentProfileScreenState();
+}
+
+class _StudentProfileScreenState extends State<StudentProfileScreen> {
+  final _profileService = StudentProfileService();
+  bool _uploadingPhoto = false;
+
   String get _email =>
-      (studentData['gmail'] ?? studentData['email'] ?? '').toString().trim().toLowerCase();
+      (widget.studentData['gmail'] ?? widget.studentData['email'] ?? '')
+          .toString()
+          .trim()
+          .toLowerCase();
 
   Future<void> _logout(BuildContext context) async {
     await StudentAuthService.signOut();
@@ -28,15 +42,43 @@ class StudentProfileScreen extends StatelessWidget {
     );
   }
 
+  Future<void> _pickAndUploadPhoto() async {
+    final picker = ImagePicker();
+    final picked =
+        await picker.pickImage(source: ImageSource.gallery, imageQuality: 80);
+    if (picked == null) return;
+
+    setState(() => _uploadingPhoto = true);
+    try {
+      final url = await CloudinaryService.uploadImage(File(picked.path));
+      if (url != null) {
+        await _profileService.updatePhotoUrl(_email, url);
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Profile photo updated!')),
+          );
+        }
+      } else {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Upload failed. Please try again.')),
+          );
+        }
+      }
+    } finally {
+      if (mounted) setState(() => _uploadingPhoto = false);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return SafeArea(
       child: SingleChildScrollView(
         padding: const EdgeInsets.fromLTRB(16, 20, 16, 28),
         child: StreamBuilder<Map<String, dynamic>?>(
-          stream: StudentProfileService().streamProfile(_email),
+          stream: _profileService.streamProfile(_email),
           builder: (context, snapshot) {
-            final data      = snapshot.data ?? studentData;
+            final data      = snapshot.data ?? widget.studentData;
             final name      = (data['name']         ?? '—').toString();
             final gmail     = (data['gmail']         ?? data['email'] ?? '—').toString();
             final studentId = (data['studentId']     ?? '—').toString();
@@ -45,6 +87,7 @@ class StudentProfileScreen extends StatelessWidget {
             final dob       = (data['dob']           ?? data['DOB'] ?? '—').toString();
             final mentor    = (data['mentorName']    ?? data['mentor'] ?? '—').toString();
             final family    = (data['familyMembers']?.toString() ?? '—');
+            final photoUrl  = (data['photoUrl']      ?? '').toString();
 
             final cards = [
               _CardData('Name',           name,      Icons.person_rounded,
@@ -75,22 +118,66 @@ class StudentProfileScreen extends StatelessWidget {
                     .animate().fadeIn(),
                 const SizedBox(height: 20),
 
-                // Avatar
-                Container(
-                  width: 88,
-                  height: 88,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    gradient: AppGradients.blueGradient,
-                    boxShadow: [
-                      BoxShadow(
-                          color: AppColors.lightBlue.withValues(alpha: 0.4),
-                          blurRadius: 20,
-                          offset: const Offset(0, 8))
+                // Avatar with upload button
+                GestureDetector(
+                  onTap: _uploadingPhoto ? null : _pickAndUploadPhoto,
+                  child: Stack(
+                    alignment: Alignment.bottomRight,
+                    children: [
+                      Container(
+                        width: 88,
+                        height: 88,
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          gradient: AppGradients.blueGradient,
+                          boxShadow: [
+                            BoxShadow(
+                                color: AppColors.lightBlue.withValues(alpha: 0.4),
+                                blurRadius: 20,
+                                offset: const Offset(0, 8))
+                          ],
+                        ),
+                        child: _uploadingPhoto
+                            ? const Padding(
+                                padding: EdgeInsets.all(22),
+                                child: CircularProgressIndicator(
+                                    strokeWidth: 2.5,
+                                    color: Colors.white),
+                              )
+                            : ClipOval(
+                                child: photoUrl.isNotEmpty
+                                    ? Image.network(
+                                        photoUrl,
+                                        fit: BoxFit.cover,
+                                        loadingBuilder: (_, child, progress) =>
+                                            progress == null
+                                                ? child
+                                                : const Padding(
+                                                    padding: EdgeInsets.all(22),
+                                                    child: CircularProgressIndicator(
+                                                        strokeWidth: 2.5,
+                                                        color: Colors.white),
+                                                  ),
+                                        errorBuilder: (_, __, ___) =>
+                                            const Icon(Icons.person_rounded,
+                                                size: 44, color: Colors.white),
+                                      )
+                                    : const Icon(Icons.person_rounded,
+                                        size: 44, color: Colors.white),
+                              ),
+                      ),
+                      Container(
+                        width: 26,
+                        height: 26,
+                        decoration: const BoxDecoration(
+                          color: Colors.white,
+                          shape: BoxShape.circle,
+                        ),
+                        child: const Icon(Icons.camera_alt_rounded,
+                            size: 16, color: Colors.black87),
+                      ),
                     ],
                   ),
-                  child: const Icon(Icons.person_rounded,
-                      size: 44, color: Colors.white),
                 ).animate().fadeIn(delay: 100.ms).scale(
                     begin: const Offset(0.7, 0.7),
                     curve: Curves.easeOutBack),
@@ -236,3 +323,4 @@ class _InfoCard extends StatelessWidget {
     );
   }
 }
+

@@ -22,5 +22,25 @@ class StudentProfileService {
       return snap2.docs.first.data();
     });
   }
+
+  /// Updates the profile photo URL for the student identified by [email].
+  Future<void> updatePhotoUrl(String email, String photoUrl) async {
+    final normalized = email.trim().toLowerCase();
+    QuerySnapshot snap = await _db
+        .collection('students')
+        .where('gmail', isEqualTo: normalized)
+        .limit(1)
+        .get();
+    if (snap.docs.isEmpty) {
+      snap = await _db
+          .collection('students')
+          .where('email', isEqualTo: normalized)
+          .limit(1)
+          .get();
+    }
+    if (snap.docs.isNotEmpty) {
+      await snap.docs.first.reference.update({'photoUrl': photoUrl});
+    }
+  }
 }
 
