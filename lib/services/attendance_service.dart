@@ -269,7 +269,7 @@ class AttendanceService {
     required Map<String, String> data,
   }) async {
     const backendUrl =
-        'https://smart-classroom-notifications.onrender.com/notify-admins';
+        'https://smartclassroommontoring-system.onrender.com/notify-admins';
     const maxAttempts = 2;
     try {
       for (var attempt = 1; attempt <= maxAttempts; attempt++) {

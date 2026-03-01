@@ -105,7 +105,7 @@ class ScreenMonitorService {
     debugPrint('[FCM] 📤 Requesting admin fan-out notification...');
 
     const backendUrl =
-      'https://smart-classroom-notifications.onrender.com/notify-admins';
+      'https://smartclassroommontoring-system.onrender.com/notify-admins';
 
     final payload = {
       'title': title,

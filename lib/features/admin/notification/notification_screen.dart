@@ -311,7 +311,7 @@ class _NotificationScreenState extends State<NotificationScreen>
     Map<String, String>? data,
   }) async {
     const backendUrl =
-        'https://smart-classroom-notifications.onrender.com/send-notification';
+        'https://smartclassroommontoring-system.onrender.com/send-notification';
 
     const maxAttempts = 2;
     for (var attempt = 1; attempt <= maxAttempts; attempt++) {
