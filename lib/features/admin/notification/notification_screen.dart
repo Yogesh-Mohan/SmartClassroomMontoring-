@@ -8,6 +8,7 @@ import 'package:http/http.dart' as http;
 import '../../../core/theme/app_colors.dart';
 import '../../../core/widgets/glass_card.dart';
 import '../../../models/task_model.dart';
+import '../../../services/student_alerts_service.dart';
 import '../../../services/tasks_service.dart';
 
 class NotificationScreen extends StatefulWidget {
@@ -21,6 +22,7 @@ class _NotificationScreenState extends State<NotificationScreen>
     with SingleTickerProviderStateMixin {
   late final TabController _tab;
   final TasksService _tasksService = TasksService();
+  final StudentAlertsService _alertsService = StudentAlertsService();
 
   final _titleCtrl = TextEditingController();
   final _descCtrl = TextEditingController();
@@ -106,6 +108,8 @@ class _NotificationScreenState extends State<NotificationScreen>
             .toList()
           : _selectedStudents.toList(),
       );
+
+      await _createStudentTaskAlerts(taskId: taskId);
 
       final notified = await _notifyStudentsForNewTask(
         taskId: taskId,
@@ -302,6 +306,28 @@ class _NotificationScreenState extends State<NotificationScreen>
       }
     }
     return notified;
+  }
+
+  Future<void> _createStudentTaskAlerts({required String taskId}) async {
+    final title = _titleCtrl.text.trim();
+    if (title.isEmpty) return;
+
+    final recipients = _sendAll
+        ? List<Map<String, dynamic>>.from(_studentsInClass)
+        : _studentsInClass.where((row) {
+            final keys = _studentKeys(row);
+            return keys.any(_selectedStudents.contains);
+          }).toList();
+
+    for (final student in recipients) {
+      final keys = _studentKeys(student);
+      if (keys.isEmpty) continue;
+      await _alertsService.createTaskAlert(
+        taskId: taskId,
+        taskTitle: title,
+        recipientKeys: keys,
+      );
+    }
   }
 
   Future<void> _sendPushNotification({

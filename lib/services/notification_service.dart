@@ -1,6 +1,14 @@
+import 'dart:convert';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:flutter/material.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
+
+class NotificationAction {
+  final String type;
+  final Map<String, dynamic> data;
+
+  const NotificationAction({required this.type, required this.data});
+}
 
 /// NotificationService - Handles local notifications for violations
 class NotificationService {
@@ -13,6 +21,11 @@ class NotificationService {
   
   bool _isInitialized = false;
   bool _isFcmListenerRegistered = false;
+  void Function(NotificationAction action)? _actionHandler;
+
+  void setActionHandler(void Function(NotificationAction action)? handler) {
+    _actionHandler = handler;
+  }
 
   /// Initialize the notification service
   Future<void> initialize() async {
@@ -166,7 +179,7 @@ class NotificationService {
       title,
       body,
       details,
-      payload: data == null || data.isEmpty ? null : data.toString(),
+      payload: data == null || data.isEmpty ? null : jsonEncode(data),
     );
   }
 
@@ -202,11 +215,13 @@ class NotificationService {
 
     FirebaseMessaging.onMessageOpenedApp.listen((RemoteMessage message) {
       debugPrint('[FCM] Notification tapped/opened: ${message.data}');
+      _emitActionFromData(message.data);
     });
 
     final initialMessage = await FirebaseMessaging.instance.getInitialMessage();
     if (initialMessage != null) {
       debugPrint('[FCM] App opened from terminated state via notification');
+      _emitActionFromData(initialMessage.data);
     }
 
     _isFcmListenerRegistered = true;
@@ -215,7 +230,27 @@ class NotificationService {
   /// Handle notification tap
   void _onNotificationTapped(NotificationResponse response) {
     debugPrint('Notification tapped: ${response.payload}');
-    // Could navigate to a specific screen if needed
+    final payload = response.payload;
+    if (payload == null || payload.trim().isEmpty) return;
+    try {
+      final decoded = jsonDecode(payload);
+      if (decoded is Map<String, dynamic>) {
+        _emitActionFromData(decoded);
+        return;
+      }
+      if (decoded is Map) {
+        _emitActionFromData(decoded.map((k, v) => MapEntry('$k', v)));
+      }
+    } catch (_) {
+      return;
+    }
+  }
+
+  void _emitActionFromData(Map<String, dynamic>? data) {
+    if (data == null || data.isEmpty) return;
+    final type = (data['type'] ?? '').toString().trim();
+    if (type.isEmpty) return;
+    _actionHandler?.call(NotificationAction(type: type, data: data));
   }
 
   /// Request notification permissions (mainly for iOS)

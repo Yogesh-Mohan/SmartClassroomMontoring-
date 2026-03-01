@@ -3,6 +3,98 @@ const admin = require('firebase-admin');
 
 admin.initializeApp();
 
+function sanitizeDocKey(value) {
+  return String(value || '')
+    .trim()
+    .replace(/[^a-zA-Z0-9_-]/g, '_')
+    .slice(0, 120);
+}
+
+function istDateKey(date = new Date()) {
+  const formatter = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Kolkata',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  });
+  return formatter.format(date);
+}
+
+async function upsertRuleSummaryAlert(violation) {
+  const studentUID = (violation?.studentUID || '').toString().trim();
+  const regNo = (violation?.regNo || '').toString().trim();
+  const period = (violation?.period || 'Unknown').toString().trim();
+  const studentName = (violation?.name || 'Student').toString().trim();
+
+  const recipientKeys = [studentUID, regNo].filter(Boolean);
+  if (recipientKeys.length === 0) return;
+
+  const primaryKey = sanitizeDocKey(recipientKeys[0]);
+  if (!primaryKey) return;
+
+  const dayKey = istDateKey();
+  const docId = `rule_${primaryKey}_${dayKey}`;
+  const alertRef = admin.firestore().collection('student_alerts').doc(docId);
+
+  await admin.firestore().runTransaction(async (tx) => {
+    const snap = await tx.get(alertRef);
+    const currentCount = snap.exists
+      ? Number(snap.data()?.violationCount || 0)
+      : 0;
+    const nextCount = currentCount + 1;
+
+    const payload = {
+      type: 'rule_summary',
+      title: 'Rule Broken Alert',
+      message: `${nextCount} rule break${nextCount > 1 ? 's' : ''} detected today. Please follow classroom rules.`,
+      recipientKeys,
+      isRead: false,
+      summaryDate: dayKey,
+      violationCount: nextCount,
+      periods: admin.firestore.FieldValue.arrayUnion(period),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      studentName,
+    };
+
+    if (!snap.exists) {
+      payload.createdAt = admin.firestore.FieldValue.serverTimestamp();
+    }
+
+    tx.set(alertRef, payload, { merge: true });
+  });
+}
+
+async function clearCollectionInBatches(collectionName, batchSize = 400) {
+  const db = admin.firestore();
+  while (true) {
+    const snapshot = await db.collection(collectionName).limit(batchSize).get();
+    if (snapshot.empty) break;
+
+    const batch = db.batch();
+    snapshot.docs.forEach((doc) => batch.delete(doc.ref));
+    await batch.commit();
+  }
+}
+
+async function clearAllTaskSubmissions(batchSize = 300) {
+  const db = admin.firestore();
+  const tasksSnapshot = await db.collection('tasks').get();
+
+  for (const taskDoc of tasksSnapshot.docs) {
+    while (true) {
+      const submissions = await taskDoc.ref
+        .collection('submissions')
+        .limit(batchSize)
+        .get();
+      if (submissions.empty) break;
+
+      const batch = db.batch();
+      submissions.docs.forEach((submissionDoc) => batch.delete(submissionDoc.ref));
+      await batch.commit();
+    }
+  }
+}
+
 async function sendNotificationToToken({ token, title, body, data = {} }) {
   const message = {
     token,
@@ -163,10 +255,40 @@ exports.sendViolationNotification = functions.firestore
       }
 
       console.log(`📊 Success: ${successCount}, Failure: ${failureCount}`);
+
+      await upsertRuleSummaryAlert(violation);
       return { successCount, failureCount };
       
     } catch (error) {
       console.error('❌ Error sending notification:', error);
       return null;
     }
+  });
+
+exports.resetStudentTaskCycle = functions.pubsub
+  .schedule('0 0 */3 * *')
+  .timeZone('Asia/Kolkata')
+  .onRun(async () => {
+    const now = new Date();
+    const nextResetAt = new Date(now.getTime() + 3 * 24 * 60 * 60 * 1000);
+    const cycleKey = istDateKey(now);
+
+    await clearAllTaskSubmissions();
+    await clearCollectionInBatches('student_alerts');
+
+    await admin
+      .firestore()
+      .collection('system')
+      .doc('taskReset')
+      .set(
+        {
+          cycleKey,
+          lastResetAt: admin.firestore.FieldValue.serverTimestamp(),
+          nextResetAt: admin.firestore.Timestamp.fromDate(nextResetAt),
+        },
+        { merge: true }
+      );
+
+    console.log(`✅ 3-day reset completed for cycle ${cycleKey}`);
+    return null;
   });

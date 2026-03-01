@@ -2,7 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_gradients.dart';
+import '../../models/student_alert_model.dart';
 import '../../services/monitor_service.dart';
+import '../../services/notification_service.dart';
 import '../../services/timetable_monitor.dart';
 import 'home/student_home_screen.dart';
 import 'credits/credits_screen.dart';
@@ -20,24 +22,88 @@ class StudentShell extends StatefulWidget {
 
 class _StudentShellState extends State<StudentShell> {
   int _currentIndex = 0;
+  int _openTasksSignal = 0;
 
-  late final List<Widget> _pages;
+  late List<Widget> _pages;
   final ScreenMonitorService _monitorService = ScreenMonitorService();
   final TimetableMonitor     _timetableMonitor = TimetableMonitor();
+  late final List<String> _studentLookupKeys;
 
   @override
   void initState() {
     super.initState();
+    _studentLookupKeys = _resolveStudentLookupKeys();
     _pages = [
-      StudentHomeScreen(studentData: widget.studentData),
+      StudentHomeScreen(
+        studentData: widget.studentData,
+        openTasksSignal: _openTasksSignal,
+      ),
       CreditsScreen(studentData: widget.studentData),
       TimetableScreen(studentData: widget.studentData),
-      const AlertsScreen(),
+      AlertsScreen(
+        studentLookupKeys: _studentLookupKeys,
+        onAlertTap: _handleStudentAlertTap,
+      ),
       StudentProfileScreen(studentData: widget.studentData),
     ];
     
     // Start screen monitoring for this student
     _initializeMonitoring();
+    _bootstrapStudentPushRouting();
+  }
+
+  Future<void> _bootstrapStudentPushRouting() async {
+    await NotificationService().initialize();
+    await NotificationService().requestPermissions();
+    await NotificationService().registerFcmForegroundHandlers();
+    NotificationService().setActionHandler(_handleNotificationAction);
+  }
+
+  List<String> _resolveStudentLookupKeys() {
+    final d = widget.studentData;
+    final raw = [
+      d['uid'],
+      d['id'],
+      d['studentId'],
+      d['registrationNumber'],
+      d['regNo'],
+      d['rollNo'],
+      d['email'],
+      d['gmail'],
+    ];
+    final seen = <String>{};
+    final keys = <String>[];
+    for (final value in raw) {
+      if (value == null) continue;
+      final text = value.toString().trim();
+      if (text.isEmpty) continue;
+      if (seen.add(text)) keys.add(text);
+    }
+    return keys;
+  }
+
+  void _openHomeAndTasks() {
+    setState(() {
+      _currentIndex = 0;
+      _openTasksSignal++;
+      _pages[0] = StudentHomeScreen(
+        studentData: widget.studentData,
+        openTasksSignal: _openTasksSignal,
+      );
+    });
+  }
+
+  void _handleStudentAlertTap(StudentAlert alert) {
+    if (alert.type == StudentAlertType.taskAssigned) {
+      _openHomeAndTasks();
+    }
+  }
+
+  void _handleNotificationAction(NotificationAction action) {
+    final type = action.type.trim().toLowerCase();
+    if (type == 'task_assigned' || type == 'task_alert') {
+      _openHomeAndTasks();
+    }
   }
  
   Future<void> _initializeMonitoring() async {
@@ -119,6 +185,7 @@ class _StudentShellState extends State<StudentShell> {
   @override
   void dispose() {
     // Stop timetable monitor first, then the native service
+    NotificationService().setActionHandler(null);
     _timetableMonitor.stop();
     _monitorService.stopMonitoring();
     super.dispose();

@@ -82,6 +82,23 @@ service cloud.firestore {
              );
     }
 
+    function canReadStudentAlert(alertData) {
+      return isSignedIn()
+          && (
+            isAdmin()
+            || (
+              alertData.recipientKeys is list
+              && (
+                request.auth.uid in alertData.recipientKeys
+                || (
+                  request.auth.token.email is string
+                  && request.auth.token.email in alertData.recipientKeys
+                )
+              )
+            )
+          );
+    }
+
     function isAttendanceOwner(docId, attendanceData) {
       return isSignedIn()
              && (
@@ -250,6 +267,19 @@ service cloud.firestore {
                       );
         allow delete: if false;
       }
+    }
+
+    // ── STUDENT ALERTS ────────────────────────────────────────────────────────
+    match /student_alerts/{docId} {
+      allow read: if canReadStudentAlert(resource.data);
+
+      allow create, delete: if isAdmin();
+
+      allow update: if isAdmin()
+                    || (
+                      canReadStudentAlert(resource.data)
+                      && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['isRead'])
+                    );
     }
 
     // ── ATTENDANCE ────────────────────────────────────────────────────────────

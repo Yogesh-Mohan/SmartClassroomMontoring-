@@ -14,7 +14,14 @@ import '../tasks/tasks_screen.dart';
 
 class StudentHomeScreen extends StatefulWidget {
   final Map<String, dynamic> studentData;
-  const StudentHomeScreen({super.key, required this.studentData});
+  final int openTasksSignal;
+  final VoidCallback? onTasksOpened;
+  const StudentHomeScreen({
+    super.key,
+    required this.studentData,
+    this.openTasksSignal = 0,
+    this.onTasksOpened,
+  });
 
   @override
   State<StudentHomeScreen> createState() => _StudentHomeScreenState();
@@ -22,6 +29,7 @@ class StudentHomeScreen extends StatefulWidget {
 
 class _StudentHomeScreenState extends State<StudentHomeScreen> {
   static const int _violationAlertThreshold = 10;
+  int _lastHandledOpenTasksSignal = 0;
 
   late final TasksService _tasksService;
   late final ViolationsStatsService _violationsService;
@@ -74,6 +82,27 @@ class _StudentHomeScreenState extends State<StudentHomeScreen> {
     } else {
       // Handle case where classId is not available
       _dailySchedule = Future.value(DailySchedule(morning: [], afternoon: []));
+    }
+
+    _lastHandledOpenTasksSignal = widget.openTasksSignal;
+    if (widget.openTasksSignal > 0) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        _openTasksScreen();
+      });
+    }
+  }
+
+  @override
+  void didUpdateWidget(covariant StudentHomeScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.openTasksSignal != oldWidget.openTasksSignal &&
+        widget.openTasksSignal != _lastHandledOpenTasksSignal) {
+      _lastHandledOpenTasksSignal = widget.openTasksSignal;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        _openTasksScreen();
+      });
     }
   }
 
@@ -132,6 +161,20 @@ class _StudentHomeScreenState extends State<StudentHomeScreen> {
       if (seen.add(s)) out.add(s);
     }
     return out;
+  }
+
+  void _openTasksScreen() {
+    widget.onTasksOpened?.call();
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => TasksScreen(
+          studentUID: _studentUID,
+          classCandidates: _classCandidates,
+          studentLookupKeys: _studentLookupKeys,
+        ),
+      ),
+    );
   }
 
   @override
@@ -326,18 +369,7 @@ class _StudentHomeScreenState extends State<StudentHomeScreen> {
 
             // Quick Access to Tasks
             GestureDetector(
-              onTap: () {
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (context) => TasksScreen(
-                      studentUID: _studentUID,
-                      classCandidates: _classCandidates,
-                      studentLookupKeys: _studentLookupKeys,
-                    ),
-                  ),
-                );
-              },
+              onTap: _openTasksScreen,
               child: Container(
                 padding: const EdgeInsets.all(16),
                 decoration: BoxDecoration(
