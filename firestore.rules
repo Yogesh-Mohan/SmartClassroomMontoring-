@@ -86,6 +86,12 @@ service cloud.firestore {
       return isSignedIn()
           && (
             isAdmin()
+            || isTeacher()
+            || (
+              alertData.ownerKey is string
+              && alertData.ownerKey.size() > 0
+              && isStudentOwnerByDocId(alertData.ownerKey)
+            )
             || (
               alertData.recipientKeys is list
               && (
@@ -239,12 +245,12 @@ service cloud.firestore {
     match /tasks/{docId} {
       allow read: if isAdmin() || isTeacher() || canStudentReadTask(resource.data);
 
-      allow create: if isAdmin()
+      allow create: if (isAdmin() || isTeacher())
                     && request.resource.data.title is string
                     && request.resource.data.targetClassId is string
                     && request.resource.data.createdByUID == request.auth.uid;
 
-      allow update, delete: if isAdmin();
+      allow update, delete: if isAdmin() || isTeacher();
 
       match /submissions/{studentUID} {
         allow read: if isAdmin()
@@ -273,9 +279,9 @@ service cloud.firestore {
     match /student_alerts/{docId} {
       allow read: if canReadStudentAlert(resource.data);
 
-      allow create, delete: if isAdmin();
+      allow create, delete: if isAdmin() || isTeacher();
 
-      allow update: if isAdmin()
+      allow update: if isAdmin() || isTeacher()
                     || (
                       canReadStudentAlert(resource.data)
                       && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['isRead'])

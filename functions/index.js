@@ -23,6 +23,7 @@ function istDateKey(date = new Date()) {
 async function upsertRuleSummaryAlert(violation) {
   const studentUID = (violation?.studentUID || '').toString().trim();
   const regNo = (violation?.regNo || '').toString().trim();
+  const ownerKey = (regNo || studentUID || '').toString().trim();
   const period = (violation?.period || 'Unknown').toString().trim();
   const studentName = (violation?.name || 'Student').toString().trim();
 
@@ -48,6 +49,7 @@ async function upsertRuleSummaryAlert(violation) {
       title: 'Rule Broken Alert',
       message: `${nextCount} rule break${nextCount > 1 ? 's' : ''} detected today. Please follow classroom rules.`,
       recipientKeys,
+      ownerKey,
       isRead: false,
       summaryDate: dayKey,
       violationCount: nextCount,

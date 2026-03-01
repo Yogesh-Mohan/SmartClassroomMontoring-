@@ -22,10 +22,13 @@ class StudentAlertsService {
     final queryKeys = keys.take(10).toList();
     return _alertsCollection
         .where('recipientKeys', arrayContainsAny: queryKeys)
-        .orderBy('createdAt', descending: true)
         .limit(limit)
         .snapshots()
-        .map((snap) => snap.docs.map(StudentAlert.fromFirestore).toList());
+        .map((snap) {
+          final alerts = snap.docs.map(StudentAlert.fromFirestore).toList()
+            ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
+          return alerts;
+        });
   }
 
   Future<void> markAlertRead(String alertId) {
@@ -39,6 +42,7 @@ class StudentAlertsService {
     required String taskId,
     required String taskTitle,
     required List<String> recipientKeys,
+    String? ownerKey,
     String? cycleKey,
   }) async {
     final keys = _normalizeKeys(recipientKeys);
@@ -50,6 +54,7 @@ class StudentAlertsService {
       'message': '"$taskTitle" task assigned by admin. Tap to open Tasks.',
       'taskId': taskId,
       'recipientKeys': keys,
+      'ownerKey': (ownerKey ?? '').trim(),
       'isRead': false,
       'createdAt': FieldValue.serverTimestamp(),
       'cycleKey': cycleKey ?? '',

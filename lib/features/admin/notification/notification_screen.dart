@@ -109,7 +109,11 @@ class _NotificationScreenState extends State<NotificationScreen>
           : _selectedStudents.toList(),
       );
 
-      await _createStudentTaskAlerts(taskId: taskId);
+      try {
+        await _createStudentTaskAlerts(taskId: taskId);
+      } catch (e) {
+        debugPrint('[Task Alert] Failed to create student alerts: $e');
+      }
 
       final notified = await _notifyStudentsForNewTask(
         taskId: taskId,
@@ -322,10 +326,19 @@ class _NotificationScreenState extends State<NotificationScreen>
     for (final student in recipients) {
       final keys = _studentKeys(student);
       if (keys.isEmpty) continue;
+      final ownerKey = (student['id'] ??
+              student['registrationNumber'] ??
+              student['regNo'] ??
+              student['rollNo'] ??
+              student['studentId'] ??
+              student['uid'])
+          ?.toString()
+          .trim();
       await _alertsService.createTaskAlert(
         taskId: taskId,
         taskTitle: title,
         recipientKeys: keys,
+        ownerKey: (ownerKey == null || ownerKey.isEmpty) ? null : ownerKey,
       );
     }
   }
