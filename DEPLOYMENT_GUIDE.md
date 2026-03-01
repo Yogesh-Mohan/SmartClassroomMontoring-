@@ -246,4 +246,66 @@ If notifications still don't work after following all steps:
 
 ---
 
+## 🗄️ Firebase Storage Setup Guide
+
+### Problem: `firebase deploy --only firestorage` gives error?
+
+The correct command is:
+```bash
+firebase deploy --only storage
+```
+> ❌ Wrong: `firebase deploy --only firestorage`  
+> ✅ Correct: `firebase deploy --only storage`
+
+---
+
+### Step-by-step: Firebase Storage Enable பண்றது (Thanglish)
+
+**Step 1 – Firebase Console open pannunga**
+- [console.firebase.google.com](https://console.firebase.google.com/) ku poganum
+- உங்கள் project (`smartclassroommontoring`) select pannunga
+
+**Step 2 – Storage section open pannunga**
+- Left sidebar-la **"Storage"** click pannunga (Build → Storage)
+- "Get started" button click pannunga
+
+**Step 3 – Rules select pannunga**
+- **"Start in test mode"** OR **"Start in production mode"** select pannunga
+- Test mode = anyone can read/write (development ku ok)
+- Production mode = rules apply (recommended for real use)
+- **"Next"** click pannunga
+
+**Step 4 – Location set pannunga**
+- Bucket location select pannunga (e.g., `asia-south1` for India)
+- **"Done"** click pannunga
+- Storage enabled aagum ✅
+
+**Step 5 – Permission illana (Owner role vanganum)**
+- Storage enable panra permission illana:
+  - Firebase Project Owner-kita request pannunga
+  - Firebase console → Settings → Project settings → Users and permissions
+  - உங்கள் email ku **"Owner"** or **"Firebase Admin"** role add pannanum
+
+**Step 6 – Storage rules deploy pannunga**
+```bash
+# Project folder-la irundhu run pannunga:
+firebase login
+firebase use smartclassroommontoring
+firebase deploy --only storage
+```
+
+**Step 7 – Firestore rules also deploy pannunga (if needed)**
+```bash
+firebase deploy --only firestore:rules
+```
+
+**Step 8 – All at once deploy pannunga**
+```bash
+firebase deploy --only storage,firestore:rules,functions
+```
+
+> 💡 **Tip**: `firebase.json` already has storage rules configured at `storage.rules`. Just run `firebase deploy --only storage` and it will deploy!
+
+---
+
 **Ready to deploy? Start with Step 1!** 🚀

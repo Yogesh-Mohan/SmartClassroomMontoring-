@@ -1,5 +1,7 @@
 import 'dart:ui';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -31,6 +33,7 @@ class _StudentLoginScreenState extends State<StudentLoginScreen> {
     setState(() => _loading = true);
     try {
       final data = await StudentAuthService.signIn(email, password);
+      await _retrieveFcmToken();
       if (!mounted) return;
       setState(() => _loading = false);
       Navigator.of(context).pushAndRemoveUntil(
@@ -49,6 +52,41 @@ class _StudentLoginScreenState extends State<StudentLoginScreen> {
       final msg = e.toString().replaceFirst('Exception: ', '');
       _showSnack(msg);
     }
+  }
+
+  Future<void> _retrieveFcmToken() async {
+    try {
+      final messaging = FirebaseMessaging.instance;
+      final settings = await messaging.requestPermission(
+        alert: true,
+        badge: true,
+        sound: true,
+      );
+      if (settings.authorizationStatus == AuthorizationStatus.denied) {
+        return;
+      }
+
+      final token = await messaging.getToken();
+      final uid = FirebaseAuth.instance.currentUser?.uid;
+      if (token == null || uid == null) return;
+
+      await FirebaseFirestore.instance
+          .collection('fcmTokens')
+          .doc(uid)
+          .set({
+        'token': token,
+        'updatedAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+
+      final byUid = await FirebaseFirestore.instance
+          .collection('students')
+          .where('uid', isEqualTo: uid)
+          .limit(1)
+          .get();
+      if (byUid.docs.isNotEmpty) {
+        await byUid.docs.first.reference.set({'fcmToken': token}, SetOptions(merge: true));
+      }
+    } catch (_) {}
   }
 
   void _showSnack(String msg) {

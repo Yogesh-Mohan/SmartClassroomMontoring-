@@ -3,9 +3,11 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../../core/theme/app_gradients.dart';
+import '../advisor/advisor_dashboard.dart';
 import '../admin/admin_shell.dart';
 import '../role_select/role_select_screen.dart';
 import '../student/student_shell.dart';
+import '../teacher/teacher_dashboard.dart';
 
 /// AuthGate checks Firebase Auth state on app launch.
 /// - If a user is already signed in → fetch their profile (admin or student)
@@ -19,49 +21,60 @@ class AuthGate extends StatefulWidget {
 }
 
 class _AuthGateState extends State<AuthGate> {
+  late final Future<Widget> _initialScreenFuture;
+
   @override
   void initState() {
     super.initState();
-    _checkAuthAndRoute();
+    _initialScreenFuture = _resolveInitialScreen();
   }
 
-  Future<void> _checkAuthAndRoute() async {
+  Future<Widget> _resolveInitialScreen() async {
     final user = FirebaseAuth.instance.currentUser;
 
     if (user == null) {
-      // Not logged in — go to role selection
-      _goTo(const RoleSelectScreen());
-      return;
+      return const RoleSelectScreen();
     }
 
-    final email = user.email?.toLowerCase().trim() ?? '';
-
     try {
-      // ── Try admin first ────────────────────────────────────────────────────
-      final adminData = await _fetchAdminProfile(email, user.uid);
-      if (!mounted) return;
-      if (adminData != null) {
-        _goTo(AdminShell(adminData: adminData));
-        return;
+      final roleProfile = await _fetchUserRole(user.uid);
+      if (roleProfile != null) {
+        final role = roleProfile['role'];
+        final data = roleProfile['data'] as Map<String, dynamic>;
+        if (role == 'student') {
+          return StudentShell(studentData: data);
+        }
+        if (role == 'admin') {
+          return AdminShell(adminData: data);
+        }
+        if (role == 'advisor') {
+          return AdvisorDashboard(advisorData: data);
+        }
+        if (role == 'teacher') {
+          return TeacherDashboard(teacherData: data);
+        }
       }
 
-      // ── Try student ────────────────────────────────────────────────────────
+      final email = user.email?.toLowerCase().trim() ?? '';
+
+      // ── Backward compatible fallbacks ──────────────────────────────────────
+      final adminData = await _fetchAdminProfile(email, user.uid);
+      if (adminData != null) {
+        return AdminShell(adminData: adminData);
+      }
+
       final studentData = await _fetchStudentProfile(email, user.uid);
-      if (!mounted) return;
       if (studentData != null) {
-        _goTo(StudentShell(studentData: studentData));
-        return;
+        return StudentShell(studentData: studentData);
       }
 
       // ── Profile not found in any collection — sign out and re-login ────────
       await FirebaseAuth.instance.signOut();
-      if (!mounted) return;
-      _goTo(const RoleSelectScreen());
+      return const RoleSelectScreen();
     } catch (_) {
       // On any error (network, permissions) sign out and show login
       await FirebaseAuth.instance.signOut().catchError((_) {});
-      if (!mounted) return;
-      _goTo(const RoleSelectScreen());
+      return const RoleSelectScreen();
     }
   }
 
@@ -114,46 +127,57 @@ class _AuthGateState extends State<AuthGate> {
     }
   }
 
-  void _goTo(Widget screen) {
-    Navigator.of(context).pushReplacement(
-      PageRouteBuilder(
-        pageBuilder: (_, _, _) => screen,
-        transitionsBuilder: (_, anim, _, child) =>
-            FadeTransition(opacity: anim, child: child),
-        transitionDuration: const Duration(milliseconds: 500),
-      ),
-    );
+  Future<Map<String, dynamic>?> _fetchUserRole(String uid) async {
+    try {
+      final doc = await FirebaseFirestore.instance.collection('users').doc(uid).get();
+      if (!doc.exists) return null;
+      final data = doc.data() ?? {};
+      final role = (data['role'] ?? '').toString().toLowerCase().trim();
+      if (role.isEmpty) return null;
+      return {'role': role, 'data': {'id': uid, ...data}};
+    } catch (_) {
+      return null;
+    }
   }
 
   @override
   Widget build(BuildContext context) {
-    // Splash / loading screen while resolving auth state
-    return Scaffold(
-      body: Container(
-        decoration:
-            const BoxDecoration(gradient: AppGradients.primaryVertical),
-        child: Center(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const CircularProgressIndicator(
-                color: Colors.white,
-                strokeWidth: 2.5,
+    return FutureBuilder<Widget>(
+      future: _initialScreenFuture,
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.done && snapshot.hasData) {
+          return snapshot.data!;
+        }
+
+        // Splash / loading screen while resolving auth state
+        return Scaffold(
+          body: Container(
+            decoration:
+                const BoxDecoration(gradient: AppGradients.primaryVertical),
+            child: Center(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const CircularProgressIndicator(
+                    color: Colors.white,
+                    strokeWidth: 2.5,
+                  ),
+                  const SizedBox(height: 20),
+                  Text(
+                    'Smart Classroom',
+                    style: GoogleFonts.poppins(
+                      color: Colors.white,
+                      fontSize: 18,
+                      fontWeight: FontWeight.w600,
+                      letterSpacing: 0.5,
+                    ),
+                  ),
+                ],
               ),
-              const SizedBox(height: 20),
-              Text(
-                'Smart Classroom',
-                style: GoogleFonts.poppins(
-                  color: Colors.white,
-                  fontSize: 18,
-                  fontWeight: FontWeight.w600,
-                  letterSpacing: 0.5,
-                ),
-              ),
-            ],
+            ),
           ),
-        ),
-      ),
+        );
+      },
     );
   }
 }

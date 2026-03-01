@@ -16,7 +16,22 @@ class AdminProfileScreen extends StatelessWidget {
       (adminData['gmail'] ?? adminData['email'] ?? '').toString().trim().toLowerCase();
 
   Future<void> _logout(BuildContext context) async {
-    await AdminAuthService.signOut();
+    try {
+      await AdminAuthService.signOut();
+    } catch (e) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Logout failed: ${e.toString().replaceFirst('Exception: ', '')}',
+            style: GoogleFonts.poppins(fontSize: 13),
+          ),
+          backgroundColor: AppColors.danger,
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      return;
+    }
     if (!context.mounted) return;
     Navigator.of(context).pushAndRemoveUntil(
       PageRouteBuilder(

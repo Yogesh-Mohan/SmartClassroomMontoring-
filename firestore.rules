@@ -2,23 +2,112 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isAdmin() {
+      return isSignedIn()
+             && (
+               exists(/databases/$(database)/documents/admins/$(request.auth.uid))
+               || (
+                 exists(/databases/$(database)/documents/users/$(request.auth.uid))
+                   && (
+                     get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin'
+                     || get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'Admin'
+                     || get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'ADMIN'
+                   )
+               )
+             );
+    }
+
+    function isTeacher() {
+      return isSignedIn()
+             && (
+               exists(/databases/$(database)/documents/teachers/$(request.auth.uid))
+               || (
+                 exists(/databases/$(database)/documents/users/$(request.auth.uid))
+                 && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'teacher'
+               )
+             );
+    }
+
+    function isStudentOwnerByDocId(studentDocId) {
+      return isSignedIn()
+             && studentDocId is string
+             && studentDocId.size() > 0
+             && (
+               studentDocId == request.auth.uid
+               || (
+                 exists(/databases/$(database)/documents/students/$(studentDocId))
+                 && get(/databases/$(database)/documents/students/$(studentDocId)).data.uid == request.auth.uid
+               )
+             );
+    }
+
+    function isStudentSelfDoc(docId) {
+      return isSignedIn()
+             && (
+               docId == request.auth.uid
+               || (
+                 exists(/databases/$(database)/documents/students/$(docId))
+                 && get(/databases/$(database)/documents/students/$(docId)).data.uid == request.auth.uid
+               )
+             );
+    }
+
+    function isStudentSelfByEmail(studentData) {
+      return isSignedIn()
+             && request.auth.token.email is string
+             && (
+               (studentData.gmail is string && studentData.gmail == request.auth.token.email)
+               || (studentData.email is string && studentData.email == request.auth.token.email)
+             );
+    }
+
+    function isCertificateOwner(certData) {
+      return isSignedIn()
+             && (
+               (certData.studentUid is string && certData.studentUid == request.auth.uid)
+               || isStudentOwnerByDocId(certData.studentId)
+             );
+    }
+
+    function canStudentReadTask(taskData) {
+      return isSignedIn()
+          && (
+              (taskData.audienceType == 'all')
+              || (taskData.audienceType == 'allInClass')
+              || (request.auth.uid in taskData.assigneeUIDs)
+             );
+    }
+
     // ── STUDENTS ──────────────────────────────────────────────────────────────
     // Any authenticated user can read (needed for login flow to fetch profile).
     // Only the matching student (by uid) can update their own doc.
     // No one can create/delete from the app.
     match /students/{docId} {
-      allow read: if request.auth != null;
-      allow update: if request.auth != null
-                    && request.auth.uid == resource.data.uid;
+      allow read: if isAdmin()
+                  || isStudentSelfDoc(docId)
+                  || isStudentSelfByEmail(resource.data);
+
+      allow update: if isSignedIn()
+                    && (
+                      isStudentSelfDoc(docId)
+                      || (
+                        (!(resource.data.uid is string) || resource.data.uid == '')
+                        && request.resource.data.uid is string
+                        && request.resource.data.uid == request.auth.uid
+                      )
+                    );
       allow create, delete: if false;
     }
 
     // ── ADMINS ────────────────────────────────────────────────────────────────
     match /admins/{docId} {
-      allow read: if request.auth != null;
-      allow update: if request.auth != null
-                    && request.auth.uid == resource.data.uid;
-      allow create, delete: if false;
+      allow read: if isAdmin() || (isSignedIn() && request.auth.uid == docId);
+      allow create, update: if isSignedIn() && request.auth.uid == docId;
+      allow delete: if false;
     }
 
     // ── DEVICES ───────────────────────────────────────────────────────────────
@@ -45,15 +134,142 @@ service cloud.firestore {
     // Authenticated students can create their own violation docs.
     // Only the student who owns it (or admin) can read.
     match /violations/{docId} {
-      allow read: if request.auth != null;
+      allow read: if isAdmin()
+                  || (
+                    request.auth != null
+                    && (
+                      resource.data.studentUID == request.auth.uid
+                      || isStudentOwnerByDocId(resource.data.studentUID)
+                    )
+                  );
       allow create: if request.auth != null
-                    && request.resource.data.studentUID == request.auth.uid;
+                    && (
+                      request.resource.data.studentUID == request.auth.uid
+                      || isStudentOwnerByDocId(request.resource.data.studentUID)
+                    );
       allow update, delete: if false;
     }
 
     // ── FCM TOKENS ───────────────────────────────────────────────────────────
     match /fcmTokens/{docId} {
-      allow read, write: if request.auth != null;
+      allow read: if isAdmin() || (isSignedIn() && request.auth.uid == docId);
+      allow write: if isSignedIn() && request.auth.uid == docId;
+    }
+
+    // ── CERTIFICATES ─────────────────────────────────────────────────────────
+    match /certificates/{docId} {
+      allow read: if isAdmin() || isCertificateOwner(resource.data);
+
+      allow create: if isCertificateOwner(request.resource.data)
+                    && request.resource.data.status == 'Pending';
+
+      allow update: if isAdmin();
+      allow delete: if false;
+    }
+
+    // ── INTERACTION SCORES & INTERNAL MARKS ─────────────────────────────────
+    match /interactionScores/{docId} {
+      allow read: if isAdmin()
+                  || (
+                    isSignedIn()
+                    && (
+                      resource.data.studentId == request.auth.uid
+                      || (resource.data.studentUid is string && resource.data.studentUid == request.auth.uid)
+                      || isStudentOwnerByDocId(resource.data.studentId)
+                    )
+                  );
+      allow create: if isAdmin() || isTeacher();
+      allow update, delete: if false;
+    }
+
+    match /internalMarks/{docId} {
+      allow read: if isAdmin()
+                  || (
+                    isSignedIn()
+                    && (
+                      resource.data.studentId == request.auth.uid
+                      || (resource.data.studentUid is string && resource.data.studentUid == request.auth.uid)
+                      || isStudentOwnerByDocId(resource.data.studentId)
+                    )
+                  );
+      allow create, update: if isAdmin() || isTeacher();
+      allow delete: if false;
+    }
+
+    // ── USERS & TEACHERS (for role checks) ──────────────────────────────────
+    match /users/{docId} {
+      allow read: if isAdmin() || (isSignedIn() && request.auth.uid == docId);
+      allow write: if false;
+    }
+
+    match /teachers/{docId} {
+      allow read: if isAdmin() || (isSignedIn() && request.auth.uid == docId);
+      allow write: if false;
+    }
+
+    // ── TASKS ─────────────────────────────────────────────────────────────────
+    // Admin creates class/selected assignments. Students can read assigned tasks
+    // and submit proof via subcollection.
+    match /tasks/{docId} {
+      allow read: if isAdmin() || isTeacher() || canStudentReadTask(resource.data);
+
+      allow create: if isAdmin()
+                    && request.resource.data.title is string
+                    && request.resource.data.targetClassId is string
+                    && request.resource.data.createdByUID == request.auth.uid;
+
+      allow update, delete: if isAdmin();
+
+      match /submissions/{studentUID} {
+        allow read: if isAdmin()
+                    || (isSignedIn() && request.auth.uid == studentUID)
+                    || (
+                      isSignedIn()
+                      && get(/databases/$(database)/documents/tasks/$(docId)).data.createdByUID == request.auth.uid
+                    );
+
+        allow create, update: if isSignedIn()
+                              && request.auth.uid == studentUID
+                              && request.resource.data.studentUID == studentUID
+                              && request.resource.data.reviewStatus == 'pending'
+                              && request.resource.data.attemptCount <= 3;
+
+        allow update: if isAdmin()
+                      || (
+                        isSignedIn()
+                        && get(/databases/$(database)/documents/tasks/$(docId)).data.createdByUID == request.auth.uid
+                      );
+        allow delete: if false;
+      }
+    }
+
+    // ── ATTENDANCE ────────────────────────────────────────────────────────────
+    // Students can read and create their own attendance records
+    match /attendance/{docId} {
+      allow read: if isAdmin()
+                  || (
+                    isSignedIn()
+                    && (
+                      resource.data.studentUID == request.auth.uid
+                      || isStudentOwnerByDocId(resource.data.studentUID)
+                    )
+                  );
+
+      allow create: if isSignedIn()
+                    && (
+                      request.resource.data.studentUID == request.auth.uid
+                      || isStudentOwnerByDocId(request.resource.data.studentUID)
+                    );
+
+      allow update: if isAdmin()
+                    || (
+                      isSignedIn()
+                      && (
+                        resource.data.studentUID == request.auth.uid
+                        || isStudentOwnerByDocId(resource.data.studentUID)
+                      )
+                    );
+      allow delete: if false;
     }
 
     // ── BLOCK EVERYTHING ELSE ────────────────────────────────────────────────

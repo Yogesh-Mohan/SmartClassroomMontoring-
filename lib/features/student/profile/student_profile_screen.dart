@@ -5,6 +5,7 @@ import '../../../core/theme/app_colors.dart';
 import '../../../core/theme/app_gradients.dart';
 import '../../auth/student_auth_service.dart';
 import '../../role_select/role_select_screen.dart';
+import '../../../services/attendance_service.dart';
 import '../student_profile_service.dart';
 
 class StudentProfileScreen extends StatelessWidget {
@@ -14,7 +15,49 @@ class StudentProfileScreen extends StatelessWidget {
   String get _email =>
       (studentData['gmail'] ?? studentData['email'] ?? '').toString().trim().toLowerCase();
 
-  Future<void> _logout(BuildContext context) async {
+  Future<void> _logout(BuildContext context, Map<String, dynamic> profileData) async {
+    final classId = (profileData['className'] ??
+            profileData['class'] ??
+            profileData['classId'] ??
+            profileData['section'] ??
+            profileData['course'] ??
+            profileData['batch'] ??
+            '')
+        .toString()
+        .trim();
+
+    try {
+      final result = await AttendanceService.instance.handleLogout(
+        studentData: profileData,
+        classId: classId,
+      );
+
+      if (!result.allowed) {
+        if (!context.mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(result.reason, style: GoogleFonts.poppins(fontSize: 13)),
+            backgroundColor: AppColors.warning,
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+        return;
+      }
+    } catch (e) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Logout processing failed: ${e.toString().replaceFirst('Exception: ', '')}',
+            style: GoogleFonts.poppins(fontSize: 13),
+          ),
+          backgroundColor: AppColors.danger,
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      return;
+    }
+
     await StudentAuthService.signOut();
     if (!context.mounted) return;
     Navigator.of(context).pushAndRemoveUntil(
@@ -147,7 +190,7 @@ class StudentProfileScreen extends StatelessWidget {
                       ],
                     ),
                     child: ElevatedButton.icon(
-                      onPressed: () => _logout(context),
+                      onPressed: () => _logout(context, data),
                       icon: const Icon(Icons.logout_rounded,
                           color: Colors.white, size: 22),
                       label: Text('Logout',

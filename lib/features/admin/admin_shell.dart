@@ -5,8 +5,9 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_gradients.dart';
+import '../../services/notification_service.dart';
+import '../advisor/pending_certificates_screen.dart';
 import 'home/admin_home_screen.dart';
-import 'monitoring/monitoring_screen.dart';
 import 'notification/notification_screen.dart';
 import 'profile/admin_profile_screen.dart';
 import 'violations/violations_screen.dart';
@@ -29,12 +30,38 @@ class _AdminShellState extends State<AdminShell> {
     super.initState();
     _pages = [
       AdminHomeScreen(adminData: widget.adminData),
-      const MonitoringScreen(),
+      PendingCertificatesScreen(advisorData: widget.adminData),
       const AdminViolationsScreen(),
       const NotificationScreen(),
       AdminProfileScreen(adminData: widget.adminData),
     ];
+    _bootstrapAdminPush();
     _setupFcmTokenRefreshListener();
+  }
+
+  Future<void> _bootstrapAdminPush() async {
+    await NotificationService().initialize();
+    await NotificationService().requestPermissions();
+    await FirebaseMessaging.instance.requestPermission(
+      alert: true,
+      badge: true,
+      sound: true,
+    );
+    await NotificationService().registerFcmForegroundHandlers();
+    await _registerCurrentFcmToken();
+  }
+
+  Future<void> _registerCurrentFcmToken() async {
+    try {
+      final token = await FirebaseMessaging.instance.getToken();
+      if (token == null || token.trim().isEmpty) {
+        debugPrint('[Admin FCM] Current token unavailable');
+        return;
+      }
+      await _saveFcmTokenToFirestore(token);
+    } catch (e) {
+      debugPrint('[Admin FCM] Failed to fetch current token: $e');
+    }
   }
 
   /// Listen for FCM token changes and automatically update Firestore.
@@ -66,7 +93,7 @@ class _AdminShellState extends State<AdminShell> {
 
   static const _navItems = [
     _NavItem(Icons.dashboard_rounded,      Icons.dashboard_outlined,       'Dashboard'),
-    _NavItem(Icons.monitor_heart_rounded,  Icons.monitor_heart_outlined,   'Monitoring'),
+    _NavItem(Icons.insights_rounded,  Icons.insights_outlined,   'Insights'),
     _NavItem(Icons.warning_amber_rounded,  Icons.warning_amber_outlined,   'Violations'),
     _NavItem(Icons.notifications_rounded,  Icons.notifications_outlined,   'Alerts'),
     _NavItem(Icons.person_rounded,         Icons.person_outlined,          'Profile'),

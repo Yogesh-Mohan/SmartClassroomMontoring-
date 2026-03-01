@@ -1,0 +1,29 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isAdmin() {
+      return isSignedIn()
+             && firestore.exists(/databases/(default)/documents/admins/$(request.auth.uid));
+    }
+
+    // Students upload their own task proof files
+    match /task_proofs/{taskId}/{studentUID}/{fileName} {
+      allow read: if isAdmin() || (isSignedIn() && request.auth.uid == studentUID);
+      allow write: if isSignedIn() && request.auth.uid == studentUID;
+    }
+
+    // Students upload their own certificate files
+    match /certificates/{studentUID}/{semester}/{fileName} {
+      allow read: if isAdmin() || (isSignedIn() && request.auth.uid == studentUID);
+      allow write: if isSignedIn() && request.auth.uid == studentUID;
+    }
+
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}

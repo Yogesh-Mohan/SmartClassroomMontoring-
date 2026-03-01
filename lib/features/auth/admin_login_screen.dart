@@ -3,7 +3,6 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../../core/theme/app_colors.dart';
@@ -99,7 +98,11 @@ class _AdminLoginScreenState extends State<AdminLoginScreen> {
       await FirebaseFirestore.instance
           .collection('admins')
           .doc(uid)
-          .set({'fcmToken': token}, SetOptions(merge: true));
+          .set({
+            'uid': uid,
+            'fcmToken': token,
+            'updatedAt': FieldValue.serverTimestamp(),
+          }, SetOptions(merge: true));
       debugPrint('Admin FCM Save: token saved to admins/$uid');
     } catch (e) {
       debugPrint('Admin FCM Save: error — $e');
