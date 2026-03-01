@@ -82,6 +82,15 @@ service cloud.firestore {
              );
     }
 
+    function isAttendanceOwner(docId, attendanceData) {
+      return isSignedIn()
+             && (
+               (attendanceData.studentUID is string && attendanceData.studentUID == request.auth.uid)
+               || isStudentOwnerByDocId(attendanceData.studentUID)
+               || docId.matches('^' + request.auth.uid + '_.*$')
+             );
+    }
+
     // ── STUDENTS ──────────────────────────────────────────────────────────────
     // Any authenticated user can read (needed for login flow to fetch profile).
     // Only the matching student (by uid) can update their own doc.
@@ -246,28 +255,22 @@ service cloud.firestore {
     // ── ATTENDANCE ────────────────────────────────────────────────────────────
     // Students can read and create their own attendance records
     match /attendance/{docId} {
-      allow read: if isAdmin()
-                  || (
-                    isSignedIn()
-                    && (
-                      resource.data.studentUID == request.auth.uid
-                      || isStudentOwnerByDocId(resource.data.studentUID)
-                    )
-                  );
+      allow read: if isAdmin() || isAttendanceOwner(docId, resource.data);
 
       allow create: if isSignedIn()
                     && (
                       request.resource.data.studentUID == request.auth.uid
                       || isStudentOwnerByDocId(request.resource.data.studentUID)
+                      || docId.matches('^' + request.auth.uid + '_.*$')
                     );
 
       allow update: if isAdmin()
+                    || isAttendanceOwner(docId, resource.data)
                     || (
                       isSignedIn()
-                      && (
-                        resource.data.studentUID == request.auth.uid
-                        || isStudentOwnerByDocId(resource.data.studentUID)
-                      )
+                      && request.resource.data.studentUID is string
+                      && request.resource.data.studentUID == request.auth.uid
+                      && docId.matches('^' + request.auth.uid + '_.*$')
                     );
       allow delete: if false;
     }
