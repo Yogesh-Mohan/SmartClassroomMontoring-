@@ -98,7 +98,11 @@ class _AdminLoginScreenState extends State<AdminLoginScreen> {
       await FirebaseFirestore.instance
           .collection('admins')
           .doc(uid)
-          .set({'fcmToken': token}, SetOptions(merge: true));
+          .set({
+            'uid': uid,
+            'fcmToken': token,
+            'updatedAt': FieldValue.serverTimestamp(),
+          }, SetOptions(merge: true));
       debugPrint('Admin FCM Save: token saved to admins/$uid');
     } catch (e) {
       debugPrint('Admin FCM Save: error — $e');

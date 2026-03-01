@@ -8,18 +8,18 @@ class AlertsScreen extends StatelessWidget {
   const AlertsScreen({super.key});
 
   static const _alerts = [
-    _Alert('Low Attendance Warning',
-        'Your Chemistry attendance dropped below 75%. Please attend classes regularly.',
-        AppColors.danger, Icons.warning_rounded, '2 days ago'),
-    _Alert('Assignment Due',
-        'Mathematics assignment due tomorrow. Submit before 11:59 PM.',
-        AppColors.warning, Icons.assignment_late_rounded, '1 day ago'),
-    _Alert('Exam Scheduled',
-        'Physics mid-term exam scheduled for next Monday at 9:00 AM in Hall A.',
-        AppColors.info, Icons.event_rounded, '3 days ago'),
-    _Alert('Grade Released',
-        'Your English essay grades have been released. Check Academic tab.',
-        AppColors.success, Icons.grade_rounded, '5 days ago'),
+    _Alert(
+      type: _AlertType.task,
+      'Task Alert (Admin)',
+      'New task sent by admin. Please complete and submit your proof.',
+      'Now',
+    ),
+    _Alert(
+      type: _AlertType.ruleBroken,
+      'Rule Broken Alert',
+      'Classroom rule violation detected. Please avoid phone usage during class.',
+      'Now',
+    ),
   ];
 
   @override
@@ -110,10 +110,38 @@ class AlertsScreen extends StatelessWidget {
 }
 
 class _Alert {
+  final _AlertType type;
   final String title;
   final String message;
-  final Color color;
-  final IconData icon;
   final String time;
-  const _Alert(this.title, this.message, this.color, this.icon, this.time);
+
+  const _Alert(
+    this.title,
+    this.message,
+    this.time, {
+    required this.type,
+  });
+
+  Color get color {
+    switch (type) {
+      case _AlertType.ruleBroken:
+        return AppColors.danger;
+      case _AlertType.task:
+        return AppColors.warning;
+    }
+  }
+
+  IconData get icon {
+    switch (type) {
+      case _AlertType.ruleBroken:
+        return Icons.warning_rounded;
+      case _AlertType.task:
+        return Icons.assignment_rounded;
+    }
+  }
+}
+
+enum _AlertType {
+  task,
+  ruleBroken,
 }

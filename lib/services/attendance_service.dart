@@ -121,10 +121,13 @@ class AttendanceService {
 
     try {
       // ── Fetch today's timetable ──────────────────────────────────────
-      final dayName  = _currentDayName();
-      final lowerDay = dayName.toLowerCase();
+        final dayName  = _currentDayName();
+        final lowerDay = dayName.toLowerCase();
+        final classIdNormalized = classId.trim();
 
-      final periods = await _fetchPeriods(classId, dayName, lowerDay);
+        final periods = classIdNormalized.isEmpty
+          ? <_PeriodInfo>[]
+          : await _fetchPeriods(classIdNormalized, dayName, lowerDay);
 
       // ── Determine current period & last period ───────────────────────
       final now            = DateTime.now();
@@ -149,13 +152,17 @@ class AttendanceService {
 
       // ── If no timetable found, allow logout gracefully ─────────────────
       if (periods.isEmpty) {
-        debugPrint('[Attendance] No timetable found for $classId — allowing logout.');
+        debugPrint('[Attendance] No timetable found for ${classIdNormalized.isEmpty ? 'unknown class' : classIdNormalized} — allowing logout.');
         final dateKey2 = _todayDateKey();
         final docId2   = '${uid}_$dateKey2';
-        await _db.collection('attendance').doc(docId2).update({
+        await _db.collection('attendance').doc(docId2).set({
+          'studentUID': uid,
+          'studentName': studentName,
+          'regNo': regNo,
+          'date': dateKey2,
           'logoutTime': FieldValue.serverTimestamp(),
           'logoutType': 'normal',
-        });
+        }, SetOptions(merge: true));
         // Notify admins even when no timetable is configured.
         unawaited(_notifyAdmins(
           title: '✅ Student Logged Out',
@@ -221,10 +228,14 @@ class AttendanceService {
       final docId   = '${uid}_$dateKey';
       final docRef  = _db.collection('attendance').doc(docId);
 
-      await docRef.update({
+      await docRef.set({
+        'studentUID': uid,
+        'studentName': studentName,
+        'regNo': regNo,
+        'date': dateKey,
         'logoutTime': FieldValue.serverTimestamp(),
         'logoutType': 'normal',
-      });
+      }, SetOptions(merge: true));
 
       debugPrint('[Attendance] Normal logout recorded: $docId');
 
@@ -258,28 +269,32 @@ class AttendanceService {
     required Map<String, String> data,
   }) async {
     const backendUrl =
-        'https://smartclassroommontoring-system.onrender.com/send-notification';
+        'https://us-central1-smartclassroommontoring.cloudfunctions.net/notifyAdmins';
+    const maxAttempts = 2;
     try {
-      final adminsSnap = await _db.collection('admins').get();
-      for (final doc in adminsSnap.docs) {
-        final token = (doc.data()['fcmToken'] ?? '').toString().trim();
-        if (token.isEmpty) continue;
+      for (var attempt = 1; attempt <= maxAttempts; attempt++) {
         try {
-          await http.post(
+          final response = await http.post(
             Uri.parse(backendUrl),
             headers: {'Content-Type': 'application/json'},
             body: json.encode({
-              'fcmToken': token,
-              'title':    title,
-              'body':     body,
-              'data':     data,
+              'title': title,
+              'body': body,
+              'data': data,
             }),
-          );
-          debugPrint('[Attendance] Notified admin ${doc.id}');
+          ).timeout(const Duration(seconds: 65));
+          if (response.statusCode == 200) {
+            debugPrint('[Attendance] notifyAdmins success via $backendUrl (attempt $attempt)');
+            return;
+          } else {
+            debugPrint('[Attendance] notifyAdmins HTTP ${response.statusCode} attempt $attempt via $backendUrl');
+          }
         } catch (e) {
-          debugPrint('[Attendance] Notify admin ${doc.id} failed: $e');
+          debugPrint('[Attendance] notifyAdmins attempt $attempt failed via $backendUrl: $e');
         }
       }
+
+      debugPrint('[Attendance] notifyAdmins failed after all attempts');
     } catch (e) {
       debugPrint('[Attendance] _notifyAdmins error: $e');
     }

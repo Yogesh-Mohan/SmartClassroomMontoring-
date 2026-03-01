@@ -6,36 +6,59 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// Initialize Firebase Admin SDK
-// Service account will be added from environment variable
-const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
+let firebaseReady = false;
 
-admin.initializeApp({
-  credential: admin.credential.cert(serviceAccount)
-});
+try {
+  const serviceAccountRaw = process.env.FIREBASE_SERVICE_ACCOUNT;
+  if (!serviceAccountRaw) {
+    throw new Error('FIREBASE_SERVICE_ACCOUNT environment variable is missing');
+  }
+
+  const serviceAccount = JSON.parse(serviceAccountRaw);
+  admin.initializeApp({
+    credential: admin.credential.cert(serviceAccount)
+  });
+  firebaseReady = true;
+} catch (error) {
+  console.error('❌ Firebase Admin initialization failed:', error.message);
+}
 
 // Health check endpoint
 app.get('/', (req, res) => {
   res.json({ 
     status: 'running',
-    message: 'Smart Classroom Notification Server' 
+    message: 'Smart Classroom Notification Server',
+    firebaseReady
   });
 });
 
 // Send notification endpoint
 app.post('/send-notification', async (req, res) => {
   try {
+    if (!firebaseReady) {
+      return res.status(503).json({
+        success: false,
+        error: 'Firebase Admin SDK is not configured on this server'
+      });
+    }
+
     const { fcmToken, title, body, data } = req.body;
+    const token = (fcmToken || '').toString().trim();
 
     // Validate input
-    if (!fcmToken || !title || !body) {
+    if (!token || !title || !body) {
       return res.status(400).json({ 
         success: false, 
         error: 'Missing required fields: fcmToken, title, body' 
       });
     }
 
-    console.log('Sending notification to:', fcmToken);
+    const maskedToken = `${token.substring(0, 10)}...${token.substring(Math.max(0, token.length - 6))}`;
+    console.log('Sending notification to token:', maskedToken);
+
+    const safeData = data && typeof data === 'object'
+      ? Object.fromEntries(Object.entries(data).map(([key, value]) => [key, String(value)]))
+      : {};
 
     // Send notification using Admin SDK
     const message = {
@@ -43,8 +66,8 @@ app.post('/send-notification', async (req, res) => {
         title: title,
         body: body,
       },
-      data: data || {},
-      token: fcmToken,
+      data: safeData,
+      token,
       android: {
         priority: 'high',
         notification: {

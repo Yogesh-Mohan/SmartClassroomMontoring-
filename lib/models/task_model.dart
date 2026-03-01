@@ -48,6 +48,17 @@ class Task {
     }
   }
 
+  static DateTime _parseDate(dynamic value) {
+    if (value is Timestamp) return value.toDate();
+    if (value is DateTime) return value;
+    if (value is int) return DateTime.fromMillisecondsSinceEpoch(value);
+    if (value is String) {
+      final parsed = DateTime.tryParse(value);
+      if (parsed != null) return parsed;
+    }
+    return DateTime.now();
+  }
+
   factory Task.fromFirestore(DocumentSnapshot doc) {
     final data = doc.data() as Map<String, dynamic>;
 
@@ -61,8 +72,8 @@ class Task {
       assigneeUIDs: (data['assigneeUIDs'] as List<dynamic>? ?? [])
           .map((e) => e.toString())
           .toList(),
-      dueDate: (data['dueDate'] as Timestamp?)?.toDate() ?? DateTime.now(),
-      createdAt: (data['createdAt'] as Timestamp?)?.toDate() ?? DateTime.now(),
+      dueDate: _parseDate(data['dueDate']),
+      createdAt: _parseDate(data['createdAt']),
       isActive: data['isActive'] as bool? ?? true,
     );
   }

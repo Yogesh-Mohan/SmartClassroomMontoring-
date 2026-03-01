@@ -27,8 +27,13 @@ class _StudentHomeScreenState extends State<StudentHomeScreen> {
   late final ViolationsStatsService _violationsService;
   late final TimetableService _timetableService;
   late final String _studentUID;
+  /// The ID stored in the violations collection's studentUID field.
+  /// monitor_service.dart saves violations using the student's Firestore doc ID
+  /// (registration number) NOT the Firebase Auth UID, so we must use that here.
+  late final String _violationStudentId;
   late final String _classId;
   late final List<String> _classCandidates;
+  late final List<String> _studentLookupKeys;
   late final Future<DailySchedule> _dailySchedule;
 
   @override
@@ -37,8 +42,28 @@ class _StudentHomeScreenState extends State<StudentHomeScreen> {
     _tasksService = TasksService();
     _violationsService = ViolationsStatsService();
     _timetableService = TimetableService();
-    _studentUID = FirebaseAuth.instance.currentUser?.uid ?? '';
+    final authUid = FirebaseAuth.instance.currentUser?.uid;
+    final profileUid = widget.studentData['uid']?.toString();
+    _studentUID = (authUid != null && authUid.trim().isNotEmpty)
+        ? authUid.trim()
+        : (profileUid ?? '').trim();
+
+    // Violations are stored with the Firestore doc ID (reg number) as studentUID.
+    // student_shell.dart passes studentData['id'] ?? studentData['registrationNumber']
+    // to startMonitoring(), which saves it as the violations 'studentUID' field.
+    // We must query by the same value, NOT the Firebase Auth UID.
+    final d = widget.studentData;
+    _violationStudentId = (d['id'] ??
+            d['registrationNumber'] ??
+            d['regNo'] ??
+            d['rollNo'] ??
+            d['studentId'] ??
+            _studentUID)
+        .toString()
+        .trim();
+
     _classCandidates = _resolveClassCandidates();
+    _studentLookupKeys = _resolveStudentLookupKeys();
     _classId = _classCandidates.isNotEmpty ? _classCandidates.first : '';
 
     if (_classId.isNotEmpty) {
@@ -83,6 +108,31 @@ class _StudentHomeScreenState extends State<StudentHomeScreen> {
 
   String get _name => widget.studentData['name'] ?? 'Student';
   String get _studentId => widget.studentData['studentId'] ?? '—';
+
+  List<String> _resolveStudentLookupKeys() {
+    final d = widget.studentData;
+    final raw = [
+      _studentUID,
+      d['uid'],
+      d['id'],
+      d['studentId'],
+      d['registrationNumber'],
+      d['regNo'],
+      d['rollNo'],
+      d['gmail'],
+      d['email'],
+    ];
+
+    final seen = <String>{};
+    final out = <String>[];
+    for (final value in raw) {
+      if (value == null) continue;
+      final s = value.toString().trim();
+      if (s.isEmpty) continue;
+      if (seen.add(s)) out.add(s);
+    }
+    return out;
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -150,6 +200,7 @@ class _StudentHomeScreenState extends State<StudentHomeScreen> {
                     stream: _tasksService.streamTaskStats(
                       studentUID: _studentUID,
                       classCandidates: _classCandidates,
+                      studentLookupKeys: _studentLookupKeys,
                     ),
                     builder: (context, snapshot) {
                       if (!snapshot.hasData) {
@@ -176,7 +227,7 @@ class _StudentHomeScreenState extends State<StudentHomeScreen> {
                 // Behavior Streak Card
                 Expanded(
                   child: FutureBuilder<int>(
-                    future: _violationsService.calculateBehaviorStreak(_studentUID),
+                    future: _violationsService.calculateBehaviorStreak(_violationStudentId),
                     builder: (context, snapshot) {
                       if (!snapshot.hasData) {
                         return _StatCard(
@@ -200,7 +251,7 @@ class _StudentHomeScreenState extends State<StudentHomeScreen> {
                 // Violations Today Card (resets at 11 PM)
                 Expanded(
                   child: StreamBuilder<int>(
-                    stream: _violationsService.streamTodayViolations(_studentUID),
+                    stream: _violationsService.streamTodayViolations(_violationStudentId),
                     builder: (context, snapshot) {
                       if (!snapshot.hasData) {
                         return _StatCard(
@@ -227,7 +278,7 @@ class _StudentHomeScreenState extends State<StudentHomeScreen> {
 
             // 🚨 High-violation alert: shown when today's violations reach 10+
             StreamBuilder<int>(
-              stream: _violationsService.streamTodayViolations(_studentUID),
+              stream: _violationsService.streamTodayViolations(_violationStudentId),
               builder: (context, snapshot) {
                 final count = snapshot.data ?? 0;
                 if (count < _violationAlertThreshold) return const SizedBox.shrink();
@@ -282,6 +333,7 @@ class _StudentHomeScreenState extends State<StudentHomeScreen> {
                     builder: (context) => TasksScreen(
                       studentUID: _studentUID,
                       classCandidates: _classCandidates,
+                      studentLookupKeys: _studentLookupKeys,
                     ),
                   ),
                 );
@@ -319,6 +371,7 @@ class _StudentHomeScreenState extends State<StudentHomeScreen> {
                             stream: _tasksService.streamTaskStats(
                               studentUID: _studentUID,
                               classCandidates: _classCandidates,
+                              studentLookupKeys: _studentLookupKeys,
                             ),
                             builder: (context, snapshot) {
                               if (!snapshot.hasData) {
@@ -375,7 +428,7 @@ class _StudentHomeScreenState extends State<StudentHomeScreen> {
                   ),
                   const SizedBox(height: 16),
                   FutureBuilder<Map<String, int>>(
-                    future: _violationsService.getViolationsByDay(_studentUID, 7),
+                    future: _violationsService.getViolationsByDay(_violationStudentId, 7),
                     builder: (context, snapshot) {
                       if (!snapshot.hasData) {
                         return const SizedBox(

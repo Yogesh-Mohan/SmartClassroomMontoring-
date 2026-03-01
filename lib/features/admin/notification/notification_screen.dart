@@ -88,7 +88,7 @@ class _NotificationScreenState extends State<NotificationScreen>
 
     setState(() => _submitting = true);
     try {
-      await _tasksService.createTaskAssignment(
+      final taskId = await _tasksService.createTaskAssignment(
         createdByUID: FirebaseAuth.instance.currentUser?.uid ?? '',
         targetClassId: _selectedClass!,
         title: _titleCtrl.text.trim(),
@@ -96,9 +96,27 @@ class _NotificationScreenState extends State<NotificationScreen>
         dueDate: _dueDate,
         audienceType:
             _sendAll ? TaskAudienceType.allInClass : TaskAudienceType.selectedStudents,
-        assigneeUIDs: _selectedStudents.toList(),
+        assigneeUIDs: _sendAll
+          ? _studentsInClass
+            .map((e) => e['uid'] ?? e['id'])
+            .where((e) => e != null)
+            .map((e) => e.toString().trim())
+            .where((e) => e.isNotEmpty)
+            .toSet()
+            .toList()
+          : _selectedStudents.toList(),
       );
-      _showSnack('Task sent successfully');
+
+      final notified = await _notifyStudentsForNewTask(
+        taskId: taskId,
+        title: _titleCtrl.text.trim(),
+      );
+
+      if (notified > 0) {
+        _showSnack('Task sent successfully • notified $notified students');
+      } else {
+        _showSnack('Task sent successfully');
+      }
       _titleCtrl.clear();
       _descCtrl.clear();
       setState(() {
@@ -142,6 +160,10 @@ class _NotificationScreenState extends State<NotificationScreen>
 
     try {
       final reviewer = FirebaseAuth.instance.currentUser?.uid ?? '';
+      if (reviewer.trim().isEmpty) {
+        _showSnack('Session expired. Please login again.', isError: true);
+        return;
+      }
       await _tasksService.reviewSubmission(
         taskId: item.taskId,
         studentUID: item.submission.studentUID,
@@ -150,44 +172,136 @@ class _NotificationScreenState extends State<NotificationScreen>
         comment: comment,
       );
 
+      _showSnack(accepted ? 'Marked as accepted' : 'Marked as rejected');
+
       final token = await _getStudentFcmToken(item.submission.studentUID);
       if (token != null && token.isNotEmpty) {
-        await _sendPushNotification(
-          token: token,
-          title: accepted ? '✅ Task Approved' : '❌ Task Needs Rework',
-          body: accepted
-              ? 'Your proof for "${item.task.title}" was accepted.'
-              : 'Your proof for "${item.task.title}" was rejected. Check comment.',
-          data: {
-            'type': 'task_review',
-            'taskId': item.taskId,
-            'status': accepted ? 'accepted' : 'rejected',
-          },
-        );
+        try {
+          await _sendPushNotification(
+            token: token,
+            title: accepted ? '✅ Task Approved' : '❌ Task Needs Rework',
+            body: accepted
+                ? 'Your proof for "${item.task.title}" was accepted.'
+                : 'Your proof for "${item.task.title}" was rejected. Check comment.',
+            data: {
+              'type': 'task_review',
+              'taskId': item.taskId,
+              'status': accepted ? 'accepted' : 'rejected',
+            },
+          );
+        } catch (_) {}
       }
-      _showSnack(accepted ? 'Marked as accepted' : 'Marked as rejected');
     } catch (e) {
       _showSnack(e.toString().replaceFirst('Exception: ', ''), isError: true);
     }
   }
 
   Future<String?> _getStudentFcmToken(String studentUID) async {
-    final tokenDoc = await FirebaseFirestore.instance
-        .collection('fcmTokens')
-        .doc(studentUID)
-        .get();
-    final token = tokenDoc.data()?['token']?.toString();
-    if (token != null && token.isNotEmpty) return token;
+    return _getStudentFcmTokenFromKeys([studentUID]);
+  }
 
-    final byUid = await FirebaseFirestore.instance
-        .collection('students')
-        .where('uid', isEqualTo: studentUID)
-        .limit(1)
-        .get();
-    if (byUid.docs.isNotEmpty) {
-      return byUid.docs.first.data()['fcmToken']?.toString();
+  Future<String?> _getStudentFcmTokenFromKeys(List<String> keys) async {
+    final candidates = <String>{
+      ...keys.map((e) => e.trim()),
+    }..removeWhere((e) => e.isEmpty);
+
+    for (final key in candidates) {
+      final tokenDoc = await FirebaseFirestore.instance
+          .collection('fcmTokens')
+          .doc(key)
+          .get();
+      final token = tokenDoc.data()?['token']?.toString().trim();
+      if (token != null && token.isNotEmpty) return token;
+
+      final byDocId = await FirebaseFirestore.instance
+          .collection('students')
+          .doc(key)
+          .get();
+      final docToken = byDocId.data()?['fcmToken']?.toString().trim();
+      if (docToken != null && docToken.isNotEmpty) return docToken;
+
+      final byUid = await FirebaseFirestore.instance
+          .collection('students')
+          .where('uid', isEqualTo: key)
+          .limit(1)
+          .get();
+      if (byUid.docs.isNotEmpty) {
+        final byUidToken = byUid.docs.first.data()['fcmToken']?.toString().trim();
+        if (byUidToken != null && byUidToken.isNotEmpty) return byUidToken;
+      }
+
+      final byStudentId = await FirebaseFirestore.instance
+          .collection('students')
+          .where('studentId', isEqualTo: key)
+          .limit(1)
+          .get();
+      if (byStudentId.docs.isNotEmpty) {
+        final byStudentIdToken =
+            byStudentId.docs.first.data()['fcmToken']?.toString().trim();
+        if (byStudentIdToken != null && byStudentIdToken.isNotEmpty) {
+          return byStudentIdToken;
+        }
+      }
     }
     return null;
+  }
+
+  List<String> _studentKeys(Map<String, dynamic> row) {
+    final raw = [
+      row['uid'],
+      row['id'],
+      row['studentId'],
+      row['registrationNumber'],
+      row['regNo'],
+      row['rollNo'],
+      row['email'],
+      row['gmail'],
+    ];
+    final out = <String>[];
+    final seen = <String>{};
+    for (final v in raw) {
+      if (v == null) continue;
+      final s = v.toString().trim();
+      if (s.isEmpty) continue;
+      if (seen.add(s)) out.add(s);
+    }
+    return out;
+  }
+
+  Future<int> _notifyStudentsForNewTask({
+    required String taskId,
+    required String title,
+  }) async {
+    final recipients = _sendAll
+        ? List<Map<String, dynamic>>.from(_studentsInClass)
+        : _studentsInClass.where((row) {
+            final keys = _studentKeys(row);
+            return keys.any(_selectedStudents.contains);
+          }).toList();
+
+    var notified = 0;
+    for (final student in recipients) {
+      try {
+        final rowToken = (student['fcmToken'] ?? '').toString().trim();
+        final token = rowToken.isNotEmpty
+            ? rowToken
+          : await _getStudentFcmTokenFromKeys(_studentKeys(student));
+        if (token == null || token.isEmpty) continue;
+        await _sendPushNotification(
+          token: token,
+          title: '📌 New Task Assigned',
+          body: '"$title" task has been assigned. Open Tasks tab to view.',
+          data: {
+            'type': 'task_assigned',
+            'taskId': taskId,
+          },
+        );
+        notified++;
+      } catch (_) {
+        continue;
+      }
+    }
+    return notified;
   }
 
   Future<void> _sendPushNotification({
@@ -197,18 +311,36 @@ class _NotificationScreenState extends State<NotificationScreen>
     Map<String, String>? data,
   }) async {
     const backendUrl =
-        'https://smartclassroommontoring-system.onrender.com/send-notification';
+        'https://us-central1-smartclassroommontoring.cloudfunctions.net/sendNotification';
 
-    await http.post(
-      Uri.parse(backendUrl),
-      headers: {'Content-Type': 'application/json'},
-      body: json.encode({
-        'fcmToken': token,
-        'title': title,
-        'body': body,
-        'data': data ?? {},
-      }),
-    );
+    const maxAttempts = 2;
+    for (var attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        final response = await http
+            .post(
+          Uri.parse(backendUrl),
+          headers: {'Content-Type': 'application/json'},
+          body: json.encode({
+            'fcmToken': token,
+            'title': title,
+            'body': body,
+            'data': data ?? {},
+          }),
+        )
+            .timeout(const Duration(seconds: 65));
+
+        if (response.statusCode >= 200 && response.statusCode < 300) return;
+        if (attempt == maxAttempts) {
+          debugPrint('[Notification] Endpoint failed $backendUrl (${response.statusCode})');
+        }
+      } catch (e) {
+        if (attempt == maxAttempts) {
+          debugPrint('[Notification] Endpoint exception $backendUrl: $e');
+        }
+      }
+    }
+
+    throw Exception('Notification service failed on all endpoints');
   }
 
   void _showSnack(String msg, {bool isError = false}) {
@@ -336,36 +468,44 @@ class _NotificationScreenState extends State<NotificationScreen>
             if (!_sendAll)
               SizedBox(
                 height: 180,
-                child: ListView.builder(
-                  itemCount: _studentsInClass.length,
-                  itemBuilder: (_, i) {
-                    final s = _studentsInClass[i];
-                    final uid = (s['uid'] ?? '').toString();
-                    final selected = _selectedStudents.contains(uid);
-                    return CheckboxListTile(
-                      value: selected,
-                      onChanged: uid.isEmpty
-                          ? null
-                          : (v) {
-                              setState(() {
-                                if (v == true) {
-                                  _selectedStudents.add(uid);
-                                } else {
-                                  _selectedStudents.remove(uid);
-                                }
-                              });
-                            },
-                      title: Text(
-                        (s['name'] ?? 'Student').toString(),
-                        style: GoogleFonts.poppins(color: Colors.white),
+                child: _studentsInClass.isEmpty
+                    ? Center(
+                        child: Text(
+                          'No students found for selected class.',
+                          style: GoogleFonts.poppins(color: AppColors.textSecondary),
+                        ),
+                      )
+                    : ListView.builder(
+                        itemCount: _studentsInClass.length,
+                        itemBuilder: (_, i) {
+                          final s = _studentsInClass[i];
+                          final uid =
+                              (s['uid'] ?? s['id'] ?? s['studentId'] ?? '').toString();
+                          final selected = _selectedStudents.contains(uid);
+                          return CheckboxListTile(
+                            value: selected,
+                            onChanged: uid.isEmpty
+                                ? null
+                                : (v) {
+                                    setState(() {
+                                      if (v == true) {
+                                        _selectedStudents.add(uid);
+                                      } else {
+                                        _selectedStudents.remove(uid);
+                                      }
+                                    });
+                                  },
+                            title: Text(
+                              (s['name'] ?? 'Student').toString(),
+                              style: GoogleFonts.poppins(color: Colors.white),
+                            ),
+                            subtitle: Text(
+                              (s['studentId'] ?? s['regNo'] ?? '').toString(),
+                              style: GoogleFonts.poppins(color: AppColors.textSecondary),
+                            ),
+                          );
+                        },
                       ),
-                      subtitle: Text(
-                        (s['studentId'] ?? s['regNo'] ?? '').toString(),
-                        style: GoogleFonts.poppins(color: AppColors.textSecondary),
-                      ),
-                    );
-                  },
-                ),
               ),
             const SizedBox(height: 12),
             SizedBox(
@@ -396,12 +536,26 @@ class _NotificationScreenState extends State<NotificationScreen>
   }
 
   Widget _reviewTab() {
+    final reviewerUID = FirebaseAuth.instance.currentUser?.uid ?? '';
     return StreamBuilder<List<PendingSubmissionItem>>(
-      stream: _tasksService.streamPendingSubmissions(),
+      stream: _tasksService.streamPendingSubmissions(reviewerUID: reviewerUID),
       builder: (context, snapshot) {
         if (snapshot.connectionState == ConnectionState.waiting) {
           return const Center(
             child: CircularProgressIndicator(color: AppColors.success),
+          );
+        }
+        if (snapshot.hasError) {
+          final message = snapshot.error.toString();
+          return Center(
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 24),
+              child: Text(
+                'Failed to load proof reviews\n$message',
+                textAlign: TextAlign.center,
+                style: GoogleFonts.poppins(color: AppColors.textSecondary),
+              ),
+            ),
           );
         }
         final items = snapshot.data ?? [];

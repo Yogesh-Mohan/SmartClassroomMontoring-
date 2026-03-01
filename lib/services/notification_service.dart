@@ -1,5 +1,6 @@
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:flutter/material.dart';
+import 'package:firebase_messaging/firebase_messaging.dart';
 
 /// NotificationService - Handles local notifications for violations
 class NotificationService {
@@ -11,6 +12,7 @@ class NotificationService {
       FlutterLocalNotificationsPlugin();
   
   bool _isInitialized = false;
+  bool _isFcmListenerRegistered = false;
 
   /// Initialize the notification service
   Future<void> initialize() async {
@@ -49,6 +51,21 @@ class NotificationService {
         .resolvePlatformSpecificImplementation<
             AndroidFlutterLocalNotificationsPlugin>()
         ?.createNotificationChannel(androidChannel);
+
+    // Create notification channel used by backend FCM payloads.
+    const backendChannel = AndroidNotificationChannel(
+      'smart_classroom_notifications',
+      'Smart Classroom Alerts',
+      description: 'Admin and classroom push notifications',
+      importance: Importance.high,
+      playSound: true,
+      enableVibration: true,
+    );
+
+    await _notificationsPlugin
+      .resolvePlatformSpecificImplementation<
+        AndroidFlutterLocalNotificationsPlugin>()
+      ?.createNotificationChannel(backendChannel);
 
     _isInitialized = true;
     debugPrint('Notification service initialized');
@@ -107,6 +124,92 @@ class NotificationService {
     );
 
     debugPrint('Violation notification shown: $title - $body');
+  }
+
+  Future<void> showPushNotification({
+    required String title,
+    required String body,
+    Map<String, dynamic>? data,
+  }) async {
+    if (!_isInitialized) {
+      await initialize();
+    }
+
+    const androidDetails = AndroidNotificationDetails(
+      'smart_classroom_notifications',
+      'Smart Classroom Alerts',
+      channelDescription: 'Admin and classroom push notifications',
+      importance: Importance.high,
+      priority: Priority.high,
+      playSound: true,
+      enableVibration: true,
+      icon: '@mipmap/ic_launcher',
+      category: AndroidNotificationCategory.message,
+      visibility: NotificationVisibility.public,
+    );
+
+    const iosDetails = DarwinNotificationDetails(
+      presentAlert: true,
+      presentBadge: true,
+      presentSound: true,
+    );
+
+    const details = NotificationDetails(
+      android: androidDetails,
+      iOS: iosDetails,
+    );
+
+    final notificationId = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+
+    await _notificationsPlugin.show(
+      notificationId,
+      title,
+      body,
+      details,
+      payload: data == null || data.isEmpty ? null : data.toString(),
+    );
+  }
+
+  Future<void> registerFcmForegroundHandlers() async {
+    if (_isFcmListenerRegistered) return;
+
+    await initialize();
+
+    await FirebaseMessaging.instance.setForegroundNotificationPresentationOptions(
+      alert: true,
+      badge: true,
+      sound: true,
+    );
+
+    FirebaseMessaging.onMessage.listen((RemoteMessage message) async {
+      final title =
+          message.notification?.title ?? message.data['title']?.toString();
+      final body = message.notification?.body ?? message.data['body']?.toString();
+
+      if ((title ?? '').trim().isEmpty && (body ?? '').trim().isEmpty) {
+        debugPrint('[FCM] Foreground message received without display content');
+        return;
+      }
+
+      await showPushNotification(
+        title: (title ?? 'Smart Classroom').trim(),
+        body: (body ?? 'New notification').trim(),
+        data: message.data,
+      );
+
+      debugPrint('[FCM] Foreground notification displayed');
+    });
+
+    FirebaseMessaging.onMessageOpenedApp.listen((RemoteMessage message) {
+      debugPrint('[FCM] Notification tapped/opened: ${message.data}');
+    });
+
+    final initialMessage = await FirebaseMessaging.instance.getInitialMessage();
+    if (initialMessage != null) {
+      debugPrint('[FCM] App opened from terminated state via notification');
+    }
+
+    _isFcmListenerRegistered = true;
   }
 
   /// Handle notification tap

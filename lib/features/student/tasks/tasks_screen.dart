@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -7,17 +8,18 @@ import 'package:intl/intl.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/theme/app_gradients.dart';
 import '../../../core/widgets/glass_card.dart';
+import '../../../services/cloudinary_upload_service.dart';
 import '../../../services/tasks_service.dart';
 import '../../../models/task_model.dart';
 
 class TasksScreen extends StatefulWidget {
   final String studentUID;
   final List<String> classCandidates;
-
-  const TasksScreen({
+  final List<String> studentLookupKeys;  const TasksScreen({
     super.key,
     required this.studentUID,
     required this.classCandidates,
+    this.studentLookupKeys = const [],
   });
 
   @override
@@ -28,10 +30,63 @@ class _TasksScreenState extends State<TasksScreen> {
   final TasksService _tasksService = TasksService();
   final ImagePicker _picker = ImagePicker();
   bool _uploading = false;
+  late Stream<List<TaskWithSubmission>> _assignedTasksStream;
+
+  @override
+  void initState() {
+    super.initState();
+    _assignedTasksStream = _buildAssignedTasksStream();
+  }
+
+  @override
+  void didUpdateWidget(covariant TasksScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.studentUID != widget.studentUID ||
+        !_sameClassCandidates(oldWidget.classCandidates, widget.classCandidates) ||
+        !_sameClassCandidates(oldWidget.studentLookupKeys, widget.studentLookupKeys)) {
+      _assignedTasksStream = _buildAssignedTasksStream();
+    }
+  }
+
+  String get _effectiveStudentUid {
+    final providedUid = widget.studentUID.trim();
+    if (providedUid.isNotEmpty) {
+      return providedUid;
+    }
+    final authUid = FirebaseAuth.instance.currentUser?.uid;
+    if (authUid != null && authUid.trim().isNotEmpty) {
+      return authUid.trim();
+    }
+    return '';
+  }
+
+  Stream<List<TaskWithSubmission>> _buildAssignedTasksStream() {
+    return _tasksService.streamStudentAssignedTasks(
+      studentUID: _effectiveStudentUid,
+      classCandidates: widget.classCandidates,
+      studentLookupKeys: widget.studentLookupKeys,
+    );
+  }
+
+  bool _sameClassCandidates(List<String> a, List<String> b) {
+    if (identical(a, b)) return true;
+    if (a.length != b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      if (a[i] != b[i]) return false;
+    }
+    return true;
+  }
+
+  bool get _isCloudinaryActive => CloudinaryUploadService.isConfigured;
 
   Future<void> _pickAndSubmitProof(TaskWithSubmission item) async {
     final status = item.status;
     final attempts = item.submission?.attemptCount ?? 0;
+    final taskId = item.task.id;
+    if (taskId == null || taskId.trim().isEmpty) {
+      _showSnack('Invalid task data. Please refresh and try again.', isError: true);
+      return;
+    }
     if (status == TaskSubmissionStatus.pending) {
       _showSnack('Already submitted. Wait for admin review.', isError: true);
       return;
@@ -51,12 +106,13 @@ class _TasksScreenState extends State<TasksScreen> {
       maxWidth: 1600,
     );
     if (picked == null) return;
+    if (!mounted) return;
 
     setState(() => _uploading = true);
     try {
       await _tasksService.submitTaskProof(
-        taskId: item.task.id!,
-        studentUID: widget.studentUID,
+        taskId: taskId,
+        studentUID: _effectiveStudentUid,
         imageFile: File(picked.path),
         maxAttempts: 3,
       );
@@ -107,6 +163,29 @@ class _TasksScreenState extends State<TasksScreen> {
                       color: Colors.white,
                     ),
                   ),
+                  const SizedBox(width: 10),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                    decoration: BoxDecoration(
+                      color: _isCloudinaryActive
+                          ? AppColors.success.withValues(alpha: 0.18)
+                          : AppColors.warning.withValues(alpha: 0.18),
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(
+                        color: _isCloudinaryActive
+                            ? AppColors.success.withValues(alpha: 0.6)
+                            : AppColors.warning.withValues(alpha: 0.6),
+                      ),
+                    ),
+                    child: Text(
+                      _isCloudinaryActive ? 'Cloudinary Active' : 'Firebase Fallback',
+                      style: GoogleFonts.poppins(
+                        fontSize: 10,
+                        fontWeight: FontWeight.w600,
+                        color: _isCloudinaryActive ? AppColors.success : AppColors.warning,
+                      ),
+                    ),
+                  ),
                 ],
               ).animate().fadeIn(),
             ),
@@ -117,10 +196,7 @@ class _TasksScreenState extends State<TasksScreen> {
               ),
             Expanded(
               child: StreamBuilder<List<TaskWithSubmission>>(
-                stream: _tasksService.streamStudentAssignedTasks(
-                  studentUID: widget.studentUID,
-                  classCandidates: widget.classCandidates,
-                ),
+                stream: _assignedTasksStream,
                 builder: (context, snapshot) {
                   if (snapshot.connectionState == ConnectionState.waiting) {
                     return const Center(
@@ -129,36 +205,44 @@ class _TasksScreenState extends State<TasksScreen> {
                   }
                   if (snapshot.hasError) {
                     return Center(
-                      child: Text(
-                        'Failed to load tasks',
-                        style: GoogleFonts.poppins(color: AppColors.textSecondary),
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 24),
+                        child: Text(
+                          'Failed to load tasks\n${snapshot.error}',
+                          textAlign: TextAlign.center,
+                          style: GoogleFonts.poppins(color: AppColors.textSecondary),
+                        ),
                       ),
                     );
                   }
 
                   final items = snapshot.data ?? [];
-                  if (items.isEmpty) {
-                    return Center(
-                      child: Text(
-                        'No teacher tasks assigned.',
-                        style: GoogleFonts.poppins(color: AppColors.textSecondary),
+                  return Column(
+                    children: [
+                      Expanded(
+                        child: items.isEmpty
+                            ? Center(
+                                child: Text(
+                                  'No teacher tasks assigned.',
+                                  style: GoogleFonts.poppins(color: AppColors.textSecondary),
+                                ),
+                              )
+                            : ListView.builder(
+                                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+                                itemCount: items.length,
+                                itemBuilder: (context, index) {
+                                  final item = items[index];
+                                  return Padding(
+                                    padding: const EdgeInsets.only(bottom: 12),
+                                    child: _TaskAssignmentTile(
+                                      item: item,
+                                      onUploadProof: () => _pickAndSubmitProof(item),
+                                    ).animate().fadeIn(delay: (index * 60).ms),
+                                  );
+                                },
+                              ),
                       ),
-                    );
-                  }
-
-                  return ListView.builder(
-                    padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
-                    itemCount: items.length,
-                    itemBuilder: (context, index) {
-                      final item = items[index];
-                      return Padding(
-                        padding: const EdgeInsets.only(bottom: 12),
-                        child: _TaskAssignmentTile(
-                          item: item,
-                          onUploadProof: () => _pickAndSubmitProof(item),
-                        ).animate().fadeIn(delay: (index * 60).ms),
-                      );
-                    },
+                    ],
                   );
                 },
               ),
