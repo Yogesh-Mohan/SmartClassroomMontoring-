@@ -3,7 +3,6 @@ import 'package:flutter_animate/flutter_animate.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/theme/app_gradients.dart';
-import '../../../core/widgets/glass_card.dart';
 import '../../auth/admin_auth_service.dart';
 import '../../role_select/role_select_screen.dart';
 import '../admin_profile_service.dart';
@@ -48,7 +47,7 @@ class AdminProfileScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     return SafeArea(
       child: SingleChildScrollView(
-        padding: const EdgeInsets.fromLTRB(20, 20, 20, 28),
+        padding: const EdgeInsets.fromLTRB(16, 20, 16, 28),
         child: StreamBuilder<Map<String, dynamic>>(
           stream: AdminProfileService.streamProfile(_email),
           builder: (context, snapshot) {
@@ -62,6 +61,25 @@ class AdminProfileScreen extends StatelessWidget {
             final joinedYear = (data['joinedYear']   ?? data['joined'] ?? '—').toString();
             final role       = (data['role']         ?? 'admin').toString().toUpperCase();
 
+            final cards = [
+              _CardData('Name',        name,       Icons.person_rounded,
+                const LinearGradient(colors: [Color(0xFF6A5ACD), Color(0xFF4535C1)])),
+              _CardData('Role',        role,       Icons.verified_user_rounded,
+                const LinearGradient(colors: [Color(0xFF00C9A7), Color(0xFF00897B)])),
+              _CardData('Department',  dept,       Icons.apartment_rounded,
+                const LinearGradient(colors: [Color(0xFFFF9A3C), Color(0xFFE07B00)])),
+              _CardData('Experience',  experience, Icons.work_outline_rounded,
+                const LinearGradient(colors: [Color(0xFFE84545), Color(0xFFB71C1C)])),
+              _CardData('Admin ID',    adminId,    Icons.badge_rounded,
+                const LinearGradient(colors: [Color(0xFF4FC3F7), Color(0xFF0288D1)])),
+              _CardData('Joined Year', joinedYear, Icons.calendar_today_rounded,
+                const LinearGradient(colors: [Color(0xFF78909C), Color(0xFF455A64)])),
+              _CardData('Phone',       phone,      Icons.phone_rounded,
+                const LinearGradient(colors: [Color(0xFF8E24AA), Color(0xFF6A1B9A)])),
+              _CardData('Gmail',       gmail,      Icons.email_rounded,
+                const LinearGradient(colors: [Color(0xFF43A047), Color(0xFF1B5E20)])),
+            ];
+
             return Column(
               children: [
                 Text('Profile',
@@ -73,16 +91,15 @@ class AdminProfileScreen extends StatelessWidget {
                     .fadeIn(),
                 const SizedBox(height: 24),
 
-                // Avatar
                 Container(
-                  width: 90,
-                  height: 90,
+                  width: 88,
+                  height: 88,
                   decoration: BoxDecoration(
                     shape: BoxShape.circle,
-                    gradient: AppGradients.greenGradient,
+                    gradient: AppGradients.blueGradient,
                     boxShadow: [
                       BoxShadow(
-                          color: AppColors.success.withValues(alpha: 0.4),
+                          color: AppColors.lightBlue.withValues(alpha: 0.4),
                           blurRadius: 20,
                           offset: const Offset(0, 8))
                     ],
@@ -93,65 +110,74 @@ class AdminProfileScreen extends StatelessWidget {
                     begin: const Offset(0.7, 0.7),
                     curve: Curves.easeOutBack),
 
-                const SizedBox(height: 12),
+                const SizedBox(height: 10),
                 Text(name,
                     style: GoogleFonts.poppins(
                         fontSize: 20,
                         fontWeight: FontWeight.w700,
                         color: Colors.white))
                     .animate().fadeIn(delay: 200.ms),
-                Text(role,
+                Text(adminId,
                     style: GoogleFonts.poppins(
                         fontSize: 12,
-                        letterSpacing: 1.4,
-                        color: AppColors.success,
-                        fontWeight: FontWeight.w600))
+                        color: AppColors.textSecondary))
                     .animate().fadeIn(delay: 250.ms),
 
-                const SizedBox(height: 28),
+                const SizedBox(height: 24),
 
-                // Info card
-                GlassCard(
-                  child: Column(
-                    children: [
-                      _InfoRow(Icons.email_outlined,              'Gmail',       gmail),
-                      const Divider(color: Colors.white12, height: 20),
-                      _InfoRow(Icons.badge_outlined,              'Admin ID',    adminId),
-                      const Divider(color: Colors.white12, height: 20),
-                      _InfoRow(Icons.apartment_rounded,           'Department',  dept),
-                      const Divider(color: Colors.white12, height: 20),
-                      _InfoRow(Icons.phone_outlined,              'Phone',       phone),
-                      const Divider(color: Colors.white12, height: 20),
-                      _InfoRow(Icons.work_outline_rounded,        'Experience',  experience),
-                      const Divider(color: Colors.white12, height: 20),
-                      _InfoRow(Icons.calendar_today_outlined,     'Joined Year', joinedYear),
-                    ],
+                GridView.builder(
+                  shrinkWrap: true,
+                  physics: const NeverScrollableScrollPhysics(),
+                  itemCount: cards.length,
+                  gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                    crossAxisCount: 2,
+                    crossAxisSpacing: 12,
+                    mainAxisSpacing: 12,
+                    childAspectRatio: 1.45,
                   ),
-                ).animate().fadeIn(delay: 300.ms).slideY(begin: 0.1, end: 0),
+                  itemBuilder: (context, i) {
+                    return _InfoCard(data: cards[i])
+                        .animate()
+                        .fadeIn(delay: Duration(milliseconds: 260 + i * 55))
+                        .slideY(begin: 0.12, end: 0);
+                  },
+                ),
 
                 const SizedBox(height: 28),
 
-                // Logout button
                 SizedBox(
                   width: double.infinity,
-                  height: 52,
-                  child: OutlinedButton.icon(
-                    style: OutlinedButton.styleFrom(
-                      side: BorderSide(
-                          color: AppColors.danger.withValues(alpha: 0.6),
-                          width: 1.5),
-                      shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(14)),
+                  height: 54,
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      gradient: const LinearGradient(
+                          colors: [Color(0xFFFF6B6B), Color(0xFFFF8E53)]),
+                      borderRadius: BorderRadius.circular(16),
+                      boxShadow: [
+                        BoxShadow(
+                            color: AppColors.danger.withValues(alpha: 0.4),
+                            blurRadius: 16,
+                            offset: const Offset(0, 6)),
+                      ],
                     ),
-                    icon: const Icon(Icons.logout_rounded,
-                        color: AppColors.danger, size: 20),
-                    label: Text('Logout',
-                        style: GoogleFonts.poppins(
-                            color: AppColors.danger,
-                            fontWeight: FontWeight.w600)),
-                    onPressed: () => _logout(context),
+                    child: ElevatedButton.icon(
+                      onPressed: () => _logout(context),
+                      icon: const Icon(Icons.logout_rounded,
+                          color: Colors.white, size: 22),
+                      label: Text('Logout',
+                          style: GoogleFonts.poppins(
+                              fontSize: 16,
+                              fontWeight: FontWeight.w600,
+                              color: Colors.white)),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.transparent,
+                        shadowColor: Colors.transparent,
+                        shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(16)),
+                      ),
+                    ),
                   ),
-                ).animate().fadeIn(delay: 400.ms),
+                ).animate().fadeIn(delay: 520.ms),
               ],
             );
           },
@@ -161,31 +187,67 @@ class AdminProfileScreen extends StatelessWidget {
   }
 }
 
-class _InfoRow extends StatelessWidget {
-  final IconData icon;
+class _CardData {
   final String label;
   final String value;
-  const _InfoRow(this.icon, this.label, this.value);
+  final IconData icon;
+  final Gradient gradient;
+  const _CardData(this.label, this.value, this.icon, this.gradient);
+}
+
+class _InfoCard extends StatelessWidget {
+  final _CardData data;
+  const _InfoCard({required this.data});
 
   @override
   Widget build(BuildContext context) {
-    return Row(
-      children: [
-        Icon(icon, color: AppColors.success, size: 20),
-        const SizedBox(width: 12),
-        Text(label,
-            style: GoogleFonts.poppins(
-                fontSize: 13, color: AppColors.textSecondary)),
-        const Spacer(),
-        Flexible(
-          child: Text(value,
-              textAlign: TextAlign.right,
-              style: GoogleFonts.poppins(
-                  fontSize: 13,
-                  fontWeight: FontWeight.w500,
-                  color: Colors.white)),
-        ),
-      ],
+    return Container(
+      decoration: BoxDecoration(
+        gradient: data.gradient,
+        borderRadius: BorderRadius.circular(18),
+        boxShadow: [
+          BoxShadow(
+              color: Colors.black.withValues(alpha: 0.22),
+              blurRadius: 10,
+              offset: const Offset(0, 4)),
+        ],
+      ),
+      child: Stack(
+        children: [
+          Positioned(
+            right: -14,
+            bottom: -14,
+            child: Icon(data.icon,
+                size: 72, color: Colors.white.withValues(alpha: 0.12)),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(14, 14, 10, 14),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Icon(data.icon, color: Colors.white, size: 26),
+                const SizedBox(height: 2),
+                Text(data.label,
+                    style: GoogleFonts.poppins(
+                        fontSize: 11,
+                        color: Colors.white.withValues(alpha: 0.8))),
+                FittedBox(
+                  fit: BoxFit.scaleDown,
+                  alignment: Alignment.centerLeft,
+                  child: Text(data.value,
+                      style: GoogleFonts.poppins(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w700,
+                          color: Colors.white),
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

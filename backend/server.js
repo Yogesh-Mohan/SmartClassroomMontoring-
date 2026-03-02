@@ -1,6 +1,7 @@
 const express = require('express');
 const admin = require('firebase-admin');
 const cors = require('cors');
+const cron = require('node-cron');
 
 const app = express();
 app.use(cors());
@@ -170,6 +171,67 @@ app.post('/notify-admins', async (req, res) => {
     });
   }
 });
+
+// ── Violations cleanup helper ────────────────────────────────────────────────
+async function deleteOldViolations() {
+  if (!firebaseReady) {
+    console.warn('⚠️ Firebase not ready — skipping violations cleanup');
+    return { deleted: 0, error: 'Firebase not ready' };
+  }
+
+  const db = admin.firestore();
+  const cutoff = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000);
+  const cutoffTs = admin.firestore.Timestamp.fromDate(cutoff);
+  const batchSize = 400;
+  let totalDeleted = 0;
+
+  try {
+    while (true) {
+      const snap = await db
+        .collection('violations')
+        .where('timestamp', '<', cutoffTs)
+        .orderBy('timestamp')
+        .limit(batchSize)
+        .get();
+
+      if (snap.empty) break;
+
+      const batch = db.batch();
+      snap.docs.forEach((doc) => batch.delete(doc.ref));
+      await batch.commit();
+      totalDeleted += snap.size;
+    }
+
+    console.log(`✅ Violations cleanup: deleted ${totalDeleted} docs older than 2 days`);
+    return { deleted: totalDeleted };
+  } catch (err) {
+    console.error('❌ Violations cleanup error:', err.message || err);
+    return { deleted: totalDeleted, error: err.message };
+  }
+}
+
+// Manual trigger endpoint (for testing or on-demand cleanup)
+app.post('/cleanup-violations', async (req, res) => {
+  const secret = (req.headers['x-cleanup-secret'] || '').trim();
+  const expected = (process.env.CLEANUP_SECRET || '').trim();
+  if (expected && secret !== expected) {
+    return res.status(401).json({ success: false, error: 'Unauthorized' });
+  }
+
+  const result = await deleteOldViolations();
+  const success = !result.error;
+  return res.status(success ? 200 : 500).json({ success, ...result });
+});
+
+// Daily cron job — runs at 00:30 AM IST every day
+cron.schedule(
+  '30 0 * * *',
+  () => {
+    console.log('🕐 Running scheduled violations cleanup...');
+    deleteOldViolations();
+  },
+  { timezone: 'Asia/Kolkata' }
+);
 
 // Start server
 const PORT = process.env.PORT || 3000;

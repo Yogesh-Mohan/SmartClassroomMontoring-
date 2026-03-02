@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_gradients.dart';
@@ -28,10 +29,17 @@ class _StudentShellState extends State<StudentShell> {
   final ScreenMonitorService _monitorService = ScreenMonitorService();
   final TimetableMonitor     _timetableMonitor = TimetableMonitor();
   late final List<String> _studentLookupKeys;
+  late final List<String> _classCandidates;
+  late final String _studentUID;
 
   @override
   void initState() {
     super.initState();
+    _studentUID =
+        (FirebaseAuth.instance.currentUser?.uid ?? widget.studentData['uid'] ?? '')
+            .toString()
+            .trim();
+    _classCandidates = _resolveClassCandidates();
     _studentLookupKeys = _resolveStudentLookupKeys();
     _pages = [
       StudentHomeScreen(
@@ -41,6 +49,8 @@ class _StudentShellState extends State<StudentShell> {
       CreditsScreen(studentData: widget.studentData),
       TimetableScreen(studentData: widget.studentData),
       AlertsScreen(
+        studentUID: _studentUID,
+        classCandidates: _classCandidates,
         studentLookupKeys: _studentLookupKeys,
         onAlertTap: _handleStudentAlertTap,
       ),
@@ -62,6 +72,7 @@ class _StudentShellState extends State<StudentShell> {
   List<String> _resolveStudentLookupKeys() {
     final d = widget.studentData;
     final raw = [
+      _studentUID,
       d['uid'],
       d['id'],
       d['studentId'],
@@ -80,6 +91,34 @@ class _StudentShellState extends State<StudentShell> {
       if (seen.add(text)) keys.add(text);
     }
     return keys;
+  }
+
+  List<String> _resolveClassCandidates() {
+    final d = widget.studentData;
+    final raw = [
+      d['className'],
+      d['ClassName'],
+      d['class'],
+      d['Class'],
+      d['classId'],
+      d['class_id'],
+      d['section'],
+      d['Section'],
+      d['course'],
+      d['department'],
+      d['dept'],
+      d['batch'],
+      d['year'],
+    ];
+    final seen = <String>{};
+    final out = <String>[];
+    for (final value in raw) {
+      if (value == null) continue;
+      final text = value.toString().trim();
+      if (text.isEmpty) continue;
+      if (seen.add(text)) out.add(text);
+    }
+    return out;
   }
 
   void _openHomeAndTasks() {

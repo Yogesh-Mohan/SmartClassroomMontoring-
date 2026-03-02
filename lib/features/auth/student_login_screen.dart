@@ -7,6 +7,7 @@ import 'package:flutter_animate/flutter_animate.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_gradients.dart';
+import '../../services/attendance_service.dart';
 import '../student/student_shell.dart';
 import 'student_auth_service.dart';
 
@@ -34,6 +35,11 @@ class _StudentLoginScreenState extends State<StudentLoginScreen> {
     try {
       final data = await StudentAuthService.signIn(email, password);
       await _retrieveFcmToken();
+      if (data != null) {
+        try {
+          await AttendanceService.instance.createAttendance(studentData: data);
+        } catch (_) {}
+      }
       if (!mounted) return;
       setState(() => _loading = false);
       Navigator.of(context).pushAndRemoveUntil(

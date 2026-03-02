@@ -5,14 +5,18 @@ import 'package:intl/intl.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/widgets/glass_card.dart';
 import '../../../models/student_alert_model.dart';
-import '../../../services/student_alerts_service.dart';
+import '../../../services/tasks_service.dart';
 
 class AlertsScreen extends StatefulWidget {
+  final String studentUID;
+  final List<String> classCandidates;
   final List<String> studentLookupKeys;
   final ValueChanged<StudentAlert>? onAlertTap;
 
   const AlertsScreen({
     super.key,
+    required this.studentUID,
+    required this.classCandidates,
     required this.studentLookupKeys,
     this.onAlertTap,
   });
@@ -22,7 +26,7 @@ class AlertsScreen extends StatefulWidget {
 }
 
 class _AlertsScreenState extends State<AlertsScreen> {
-  final StudentAlertsService _alertsService = StudentAlertsService();
+  final TasksService _tasksService = TasksService();
 
   IconData _iconFor(StudentAlertType type) {
     switch (type) {
@@ -52,10 +56,22 @@ class _AlertsScreenState extends State<AlertsScreen> {
   }
 
   Future<void> _handleTap(StudentAlert alert) async {
-    if (!alert.isRead) {
-      await _alertsService.markAlertRead(alert.id);
-    }
     widget.onAlertTap?.call(alert);
+  }
+
+  StudentAlert _toTaskAlert(TaskWithSubmission item) {
+    final task = item.task;
+    final taskTitle = task.title.trim().isEmpty ? 'Assigned Task' : task.title.trim();
+    return StudentAlert(
+      id: task.id ?? '${task.title}_${task.createdAt.millisecondsSinceEpoch}',
+      type: StudentAlertType.taskAssigned,
+      title: taskTitle,
+      message: 'Task assigned by admin. Tap to open Tasks.',
+      createdAt: task.createdAt,
+      isRead: false,
+      taskId: task.id,
+      cycleKey: null,
+    );
   }
 
   @override
@@ -81,8 +97,10 @@ class _AlertsScreenState extends State<AlertsScreen> {
                 .fadeIn(delay: 100.ms),
             const SizedBox(height: 20),
             Expanded(
-              child: StreamBuilder<List<StudentAlert>>(
-                stream: _alertsService.streamStudentAlerts(
+              child: StreamBuilder<List<TaskWithSubmission>>(
+                stream: _tasksService.streamStudentAssignedTasks(
+                  studentUID: widget.studentUID,
+                  classCandidates: widget.classCandidates,
                   studentLookupKeys: widget.studentLookupKeys,
                 ),
                 builder: (context, snapshot) {
@@ -94,17 +112,19 @@ class _AlertsScreenState extends State<AlertsScreen> {
                   if (snapshot.hasError) {
                     return Center(
                       child: Text(
-                        'Failed to load alerts',
+                        'Failed to load task alerts',
                         style: GoogleFonts.poppins(color: AppColors.textSecondary),
                       ),
                     );
                   }
 
-                  final alerts = snapshot.data ?? const <StudentAlert>[];
+                  final alerts = (snapshot.data ?? const <TaskWithSubmission>[])
+                      .map(_toTaskAlert)
+                      .toList();
                   if (alerts.isEmpty) {
                     return Center(
                       child: Text(
-                        'No alerts yet',
+                        'No task alerts yet',
                         style: GoogleFonts.poppins(color: AppColors.textSecondary),
                       ),
                     );
@@ -121,72 +141,68 @@ class _AlertsScreenState extends State<AlertsScreen> {
                           onTap: () => _handleTap(alert),
                           child: GlassCard(
                             borderRadius: 16,
-                            child: Opacity(
-                              opacity: alert.isRead ? 0.78 : 1,
-                              child: Row(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Container(
-                                    width: 42,
-                                    height: 42,
-                                    decoration: BoxDecoration(
-                                      color: color.withValues(alpha: 0.15),
-                                      borderRadius: BorderRadius.circular(12),
-                                    ),
-                                    child: Icon(_iconFor(alert.type), color: color, size: 22),
+                            child: Row(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Container(
+                                  width: 42,
+                                  height: 42,
+                                  decoration: BoxDecoration(
+                                    color: color.withValues(alpha: 0.15),
+                                    borderRadius: BorderRadius.circular(12),
                                   ),
-                                  const SizedBox(width: 14),
-                                  Expanded(
-                                    child: Column(
-                                      crossAxisAlignment: CrossAxisAlignment.start,
-                                      children: [
-                                        Row(
-                                          mainAxisAlignment:
-                                              MainAxisAlignment.spaceBetween,
-                                          children: [
-                                            Expanded(
-                                              child: Text(
-                                                alert.title,
-                                                style: GoogleFonts.poppins(
-                                                  fontSize: 13,
-                                                  fontWeight: FontWeight.w600,
-                                                  color: Colors.white,
-                                                ),
-                                              ),
-                                            ),
-                                            Text(
-                                              _timeText(alert.createdAt),
+                                  child: Icon(_iconFor(alert.type), color: color, size: 22),
+                                ),
+                                const SizedBox(width: 14),
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      Row(
+                                        mainAxisAlignment:
+                                            MainAxisAlignment.spaceBetween,
+                                        children: [
+                                          Expanded(
+                                            child: Text(
+                                              alert.title,
                                               style: GoogleFonts.poppins(
-                                                fontSize: 10,
-                                                color: AppColors.textSecondary,
+                                                fontSize: 13,
+                                                fontWeight: FontWeight.w600,
+                                                color: Colors.white,
                                               ),
                                             ),
-                                          ],
-                                        ),
-                                        const SizedBox(height: 6),
-                                        Text(
-                                          alert.message,
-                                          style: GoogleFonts.poppins(
-                                            fontSize: 12,
-                                            color: AppColors.textSecondary,
-                                            height: 1.5,
                                           ),
-                                        ),
-                                      ],
-                                    ),
-                                  ),
-                                  if (!alert.isRead)
-                                    Container(
-                                      margin: const EdgeInsets.only(left: 8, top: 4),
-                                      width: 8,
-                                      height: 8,
-                                      decoration: BoxDecoration(
-                                        color: AppColors.lightBlue,
-                                        borderRadius: BorderRadius.circular(4),
+                                          Text(
+                                            _timeText(alert.createdAt),
+                                            style: GoogleFonts.poppins(
+                                              fontSize: 10,
+                                              color: AppColors.textSecondary,
+                                            ),
+                                          ),
+                                        ],
                                       ),
-                                    ),
-                                ],
-                              ),
+                                      const SizedBox(height: 6),
+                                      Text(
+                                        alert.message,
+                                        style: GoogleFonts.poppins(
+                                          fontSize: 12,
+                                          color: AppColors.textSecondary,
+                                          height: 1.5,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                                Container(
+                                  margin: const EdgeInsets.only(left: 8, top: 4),
+                                  width: 8,
+                                  height: 8,
+                                  decoration: BoxDecoration(
+                                    color: AppColors.lightBlue,
+                                    borderRadius: BorderRadius.circular(4),
+                                  ),
+                                ),
+                              ],
                             ),
                           )
                               .animate()

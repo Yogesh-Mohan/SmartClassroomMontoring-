@@ -9,6 +9,7 @@
 android {
     namespace = "com.smartclassroom.smart_classroom"
     compileSdk = flutter.compileSdkVersion
+    buildToolsVersion = "35.0.0"
     ndkVersion = flutter.ndkVersion
 
     defaultConfig {

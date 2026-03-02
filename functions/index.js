@@ -294,3 +294,33 @@ exports.resetStudentTaskCycle = functions.pubsub
     console.log(`✅ 3-day reset completed for cycle ${cycleKey}`);
     return null;
   });
+
+exports.resetOldViolations = functions.pubsub
+  .schedule('30 0 * * *')
+  .timeZone('Asia/Kolkata')
+  .onRun(async () => {
+    const db = admin.firestore();
+    const cutoffDate = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000);
+    const cutoffTimestamp = admin.firestore.Timestamp.fromDate(cutoffDate);
+    const batchSize = 400;
+    let totalDeleted = 0;
+
+    while (true) {
+      const snapshot = await db
+        .collection('violations')
+        .where('timestamp', '<', cutoffTimestamp)
+        .orderBy('timestamp')
+        .limit(batchSize)
+        .get();
+
+      if (snapshot.empty) break;
+
+      const batch = db.batch();
+      snapshot.docs.forEach((doc) => batch.delete(doc.ref));
+      await batch.commit();
+      totalDeleted += snapshot.size;
+    }
+
+    console.log(`✅ 2-day violations cleanup completed. Deleted ${totalDeleted} docs.`);
+    return null;
+  });

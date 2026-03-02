@@ -52,6 +52,8 @@ dependencies:
   provider: ^6.1.2
   url_launcher: ^6.3.0
   async: ^2.13.0
+  pdf: ^3.11.1
+  printing: ^5.14.0
 
 dev_dependencies:
   flutter_test:

@@ -7,6 +7,7 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:http/http.dart' as http;
 import '../../../core/theme/app_colors.dart';
 import '../../../core/widgets/glass_card.dart';
+import '../../../features/admin/notification/proof_image_preview_screen.dart';
 import '../../../models/task_model.dart';
 import '../../../services/student_alerts_service.dart';
 import '../../../services/tasks_service.dart';
@@ -35,6 +36,7 @@ class _NotificationScreenState extends State<NotificationScreen>
   List<String> _classIds = [];
   List<Map<String, dynamic>> _studentsInClass = [];
   final Set<String> _selectedStudents = {};
+  final Map<String, String> _studentRegNoCache = {};
 
   @override
   void initState() {
@@ -204,8 +206,64 @@ class _NotificationScreenState extends State<NotificationScreen>
     }
   }
 
+  void _openProofPreview(String imageUrl) {
+    if (imageUrl.trim().isEmpty) return;
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => ProofImagePreviewScreen(imageUrl: imageUrl),
+      ),
+    );
+  }
+
   Future<String?> _getStudentFcmToken(String studentUID) async {
     return _getStudentFcmTokenFromKeys([studentUID]);
+  }
+
+  Future<String> _resolveStudentRegNo(String studentUID) async {
+    final uid = studentUID.trim();
+    if (uid.isEmpty) return '—';
+
+    final cached = _studentRegNoCache[uid];
+    if (cached != null && cached.isNotEmpty) return cached;
+
+    String pickRegNo(Map<String, dynamic>? data) {
+      return (data?['registrationNumber'] ??
+              data?['regNo'] ??
+              data?['studentId'] ??
+              data?['rollNo'] ??
+              '')
+          .toString()
+          .trim();
+    }
+
+    try {
+      final byUid = await FirebaseFirestore.instance
+          .collection('students')
+          .where('uid', isEqualTo: uid)
+          .limit(1)
+          .get();
+      if (byUid.docs.isNotEmpty) {
+        final reg = pickRegNo(byUid.docs.first.data());
+        if (reg.isNotEmpty) {
+          _studentRegNoCache[uid] = reg;
+          return reg;
+        }
+      }
+
+      final byDocId = await FirebaseFirestore.instance
+          .collection('students')
+          .doc(uid)
+          .get();
+      if (byDocId.exists) {
+        final reg = pickRegNo(byDocId.data());
+        if (reg.isNotEmpty) {
+          _studentRegNoCache[uid] = reg;
+          return reg;
+        }
+      }
+    } catch (_) {}
+
+    return uid;
   }
 
   Future<String?> _getStudentFcmTokenFromKeys(List<String> keys) async {
@@ -625,22 +683,31 @@ class _NotificationScreenState extends State<NotificationScreen>
                       ),
                     ),
                     const SizedBox(height: 4),
-                    Text(
-                      'Student UID: ${item.submission.studentUID}',
-                      style: GoogleFonts.poppins(
-                        color: AppColors.textSecondary,
-                        fontSize: 12,
-                      ),
+                    FutureBuilder<String>(
+                      future: _resolveStudentRegNo(item.submission.studentUID),
+                      builder: (context, regSnapshot) {
+                        final regNo = regSnapshot.data ?? '...';
+                        return Text(
+                          'Reg No: $regNo',
+                          style: GoogleFonts.poppins(
+                            color: AppColors.textSecondary,
+                            fontSize: 12,
+                          ),
+                        );
+                      },
                     ),
                     const SizedBox(height: 8),
                     if (item.submission.proofImageUrl.isNotEmpty)
-                      ClipRRect(
-                        borderRadius: BorderRadius.circular(10),
-                        child: Image.network(
-                          item.submission.proofImageUrl,
-                          height: 170,
-                          width: double.infinity,
-                          fit: BoxFit.cover,
+                      GestureDetector(
+                        onTap: () => _openProofPreview(item.submission.proofImageUrl),
+                        child: ClipRRect(
+                          borderRadius: BorderRadius.circular(10),
+                          child: Image.network(
+                            item.submission.proofImageUrl,
+                            height: 170,
+                            width: double.infinity,
+                            fit: BoxFit.cover,
+                          ),
                         ),
                       ),
                     const SizedBox(height: 10),

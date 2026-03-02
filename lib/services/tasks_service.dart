@@ -32,6 +32,8 @@ class PendingSubmissionItem {
 
 /// Service for admin-assigned task workflow
 class TasksService {
+  static const Duration _completedRetention = Duration(days: 3);
+
   final FirebaseFirestore _firestore;
   final fs.FirebaseStorage _storage;
 
@@ -41,6 +43,26 @@ class TasksService {
 
   CollectionReference<Map<String, dynamic>> get _tasksCollection =>
       _firestore.collection('tasks');
+
+  bool _isExpiredCompletedSubmission(TaskSubmission? submission) {
+    if (submission == null) return false;
+    if (submission.status != TaskSubmissionStatus.accepted) return false;
+    final anchor = submission.reviewedAt ?? submission.submittedAt;
+    return DateTime.now().isAfter(anchor.add(_completedRetention));
+  }
+
+  Future<void> _cleanupExpiredAcceptedSubmission({
+    required String taskId,
+    required String studentUID,
+  }) async {
+    try {
+      await _tasksCollection
+          .doc(taskId)
+          .collection('submissions')
+          .doc(studentUID)
+          .delete();
+    } catch (_) {}
+  }
 
   String _normalizeClassKey(String value) {
     return value.trim().toLowerCase().replaceAll(RegExp(r'[^a-z0-9]'), '');
@@ -221,6 +243,17 @@ class TasksService {
             submission = null;
           }
         }
+
+        if (_isExpiredCompletedSubmission(submission)) {
+          if (effectiveStudentUID.isNotEmpty) {
+            await _cleanupExpiredAcceptedSubmission(
+              taskId: taskId,
+              studentUID: effectiveStudentUID,
+            );
+          }
+          continue;
+        }
+
         out.add(TaskWithSubmission(task: task, submission: submission));
       }
       return out;

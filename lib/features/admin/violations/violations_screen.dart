@@ -2,6 +2,10 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:intl/intl.dart';
+import 'package:pdf/pdf.dart';
+import 'package:pdf/widgets.dart' as pw;
+import 'package:printing/printing.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/widgets/glass_card.dart';
 
@@ -15,6 +19,7 @@ class AdminViolationsScreen extends StatefulWidget {
 class _AdminViolationsScreenState extends State<AdminViolationsScreen> {
   List<_ViolationItem> _items = [];
   bool _loading = true;
+  bool _exportingPdf = false;
   String? _error;
 
   @override
@@ -57,6 +62,71 @@ class _AdminViolationsScreenState extends State<AdminViolationsScreen> {
     final day   = dt.day.toString().padLeft(2, '0');
     final month = dt.month.toString().padLeft(2, '0');
     return '$h:$m $ap  •  $day/$month/${dt.year}';
+  }
+
+  Future<void> _downloadPdf() async {
+    if (_items.isEmpty) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No violations available to download')),
+      );
+      return;
+    }
+
+    setState(() => _exportingPdf = true);
+    try {
+      final doc = pw.Document();
+      final dateFormat = DateFormat('dd/MM/yyyy hh:mm a');
+
+      doc.addPage(
+        pw.MultiPage(
+          pageFormat: PdfPageFormat.a4,
+          build: (pw.Context context) {
+            return [
+              pw.Text(
+                'Violations Report',
+                style: pw.TextStyle(
+                  fontSize: 20,
+                  fontWeight: pw.FontWeight.bold,
+                ),
+              ),
+              pw.SizedBox(height: 8),
+              pw.Text('Generated on: ${dateFormat.format(DateTime.now())}'),
+              pw.SizedBox(height: 12),
+              pw.TableHelper.fromTextArray(
+                headers: const ['Name', 'Reg No', 'Period', 'Seconds', 'Timestamp'],
+                data: _items
+                    .map((item) => [
+                          item.name,
+                          item.regNo,
+                          item.period,
+                          '${item.secondsUsed}s',
+                          item.timestamp == null
+                              ? '—'
+                              : dateFormat.format(item.timestamp!.toDate().toLocal()),
+                        ])
+                    .toList(),
+              ),
+            ];
+          },
+        ),
+      );
+
+      final bytes = await doc.save();
+      await Printing.sharePdf(
+        bytes: bytes,
+        filename: 'violations_${DateFormat('yyyyMMdd_HHmm').format(DateTime.now())}.pdf',
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Failed to export PDF: $e')),
+      );
+    } finally {
+      if (mounted) {
+        setState(() => _exportingPdf = false);
+      }
+    }
   }
 
   @override
@@ -107,6 +177,25 @@ class _AdminViolationsScreenState extends State<AdminViolationsScreen> {
                     ),
                   ),
                 const SizedBox(width: 10),
+                IconButton(
+                  onPressed: _exportingPdf ? null : _downloadPdf,
+                  tooltip: 'Download PDF',
+                  icon: _exportingPdf
+                      ? const SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: Colors.white70,
+                          ),
+                        )
+                      : const Icon(
+                          Icons.download_rounded,
+                          color: Colors.white70,
+                          size: 22,
+                        ),
+                ),
+                const SizedBox(width: 2),
                 // Refresh button
                 IconButton(
                   onPressed: _fetch,

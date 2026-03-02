@@ -4,12 +4,73 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:fl_chart/fl_chart.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/widgets/glass_card.dart';
+import '../../../services/admin_dashboard_service.dart';
+import 'admin_metric_detail_screen.dart';
 
-class AdminHomeScreen extends StatelessWidget {
+class AdminHomeScreen extends StatefulWidget {
   final Map<String, dynamic> adminData;
   const AdminHomeScreen({super.key, required this.adminData});
 
-  String get _name => adminData['name'] ?? 'Admin';
+  @override
+  State<AdminHomeScreen> createState() => _AdminHomeScreenState();
+}
+
+class _AdminHomeScreenState extends State<AdminHomeScreen> {
+  late final AdminDashboardService _dashboardService;
+
+  @override
+  void initState() {
+    super.initState();
+    _dashboardService = AdminDashboardService();
+  }
+
+  String get _name => widget.adminData['name'] ?? 'Admin';
+
+  void _openStudentsList(String title, Stream<List<AdminStudentRow>> stream) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => AdminMetricDetailScreen(
+          title: title,
+          studentsStream: stream,
+        ),
+      ),
+    );
+  }
+
+  void _openAlertsList() {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => AdminMetricDetailScreen(
+          title: 'Today Alert Events',
+          alertsStream: _dashboardService.streamTodayAlertsList(),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildCountTile({
+    required String label,
+    required Stream<int> stream,
+    required IconData icon,
+    required Color color,
+    required VoidCallback onTap,
+  }) {
+    return StreamBuilder<int>(
+      stream: stream,
+      builder: (context, snapshot) {
+        final value = snapshot.hasData ? '${snapshot.data}' : '...';
+        return _StatTile(
+          label: label,
+          value: value,
+          icon: icon,
+          color: color,
+          onTap: onTap,
+        );
+      },
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -68,15 +129,44 @@ class AdminHomeScreen extends StatelessWidget {
               shrinkWrap: true,
               physics: const NeverScrollableScrollPhysics(),
               childAspectRatio: 1.4,
-              children: const [
-                _StatTile('Total Students', '128', Icons.people_rounded,
-                    AppColors.lightBlue),
-                _StatTile('Present Today', '112', Icons.how_to_reg_rounded,
-                    AppColors.success),
-                _StatTile('Low Attendance', '8', Icons.warning_rounded,
-                    AppColors.warning),
-                _StatTile('Alerts Sent', '14', Icons.notifications_active_rounded,
-                    AppColors.danger),
+              children: [
+                _buildCountTile(
+                  label: 'Total Students',
+                  stream: _dashboardService.streamTotalStudentsCount(),
+                  icon: Icons.people_rounded,
+                  color: AppColors.lightBlue,
+                  onTap: () => _openStudentsList(
+                    'Total Students',
+                    _dashboardService.streamTotalStudentsList(),
+                  ),
+                ),
+                _buildCountTile(
+                  label: 'Present Today',
+                  stream: _dashboardService.streamPresentTodayCount(),
+                  icon: Icons.how_to_reg_rounded,
+                  color: AppColors.success,
+                  onTap: () => _openStudentsList(
+                    'Logged In Now',
+                    _dashboardService.streamPresentTodayList(),
+                  ),
+                ),
+                _buildCountTile(
+                  label: 'Not Logged In',
+                  stream: _dashboardService.streamNotLoggedInTodayCount(),
+                  icon: Icons.person_off_rounded,
+                  color: AppColors.warning,
+                  onTap: () => _openStudentsList(
+                    'Not Logged In Today',
+                    _dashboardService.streamNotLoggedInTodayList(),
+                  ),
+                ),
+                _buildCountTile(
+                  label: 'Today Alerts',
+                  stream: _dashboardService.streamTodayAlertsCount(),
+                  icon: Icons.notifications_active_rounded,
+                  color: AppColors.danger,
+                  onTap: _openAlertsList,
+                ),
               ],
             ).animate().fadeIn(delay: 150.ms),
 
@@ -246,36 +336,46 @@ class _StatTile extends StatelessWidget {
   final String value;
   final IconData icon;
   final Color color;
-  const _StatTile(this.label, this.value, this.icon, this.color);
+  final VoidCallback onTap;
+  const _StatTile({
+    required this.label,
+    required this.value,
+    required this.icon,
+    required this.color,
+    required this.onTap,
+  });
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: 0.07),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: color.withValues(alpha: 0.3), width: 1),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
-          Icon(icon, color: color, size: 24),
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(value,
-                  style: GoogleFonts.poppins(
-                      fontSize: 22,
-                      fontWeight: FontWeight.w700,
-                      color: Colors.white)),
-              Text(label,
-                  style: GoogleFonts.poppins(
-                      fontSize: 11, color: AppColors.textSecondary)),
-            ],
-          ),
-        ],
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          color: Colors.white.withValues(alpha: 0.07),
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: color.withValues(alpha: 0.3), width: 1),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Icon(icon, color: color, size: 24),
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(value,
+                    style: GoogleFonts.poppins(
+                        fontSize: 22,
+                        fontWeight: FontWeight.w700,
+                        color: Colors.white)),
+                Text(label,
+                    style: GoogleFonts.poppins(
+                        fontSize: 11, color: AppColors.textSecondary)),
+              ],
+            ),
+          ],
+        ),
       ),
     );
   }

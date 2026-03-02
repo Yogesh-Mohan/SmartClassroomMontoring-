@@ -1,6 +1,10 @@
+import 'dart:typed_data';
+import 'dart:ui' as ui;
+
+import 'package:http/http.dart' as http;
 import 'package:flutter/material.dart';
+import 'package:firebase_storage/firebase_storage.dart';
 import 'package:google_fonts/google_fonts.dart';
-import 'package:url_launcher/url_launcher_string.dart';
 
 import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_gradients.dart';
@@ -127,14 +131,23 @@ class _PendingCertificatesScreenState extends State<PendingCertificatesScreen> {
                                 Row(
                                   children: [
                                     Expanded(
-                                      child: OutlinedButton.icon(
-                                        onPressed: () => _openCertificate(item.fileUrl),
+                                      child: OutlinedButton(
+                                        onPressed: () => _openCertificate(item),
                                         style: OutlinedButton.styleFrom(
                                           foregroundColor: Colors.white,
                                           side: BorderSide(color: Colors.white.withValues(alpha: 0.25)),
                                         ),
-                                        icon: const Icon(Icons.visibility_rounded),
-                                        label: const Text('View'),
+                                        child: FittedBox(
+                                          fit: BoxFit.scaleDown,
+                                          child: Row(
+                                            mainAxisSize: MainAxisSize.min,
+                                            children: const [
+                                              Icon(Icons.visibility_rounded, size: 18),
+                                              SizedBox(width: 6),
+                                              Text('View'),
+                                            ],
+                                          ),
+                                        ),
                                       ),
                                     ),
                                     const SizedBox(width: 8),
@@ -144,7 +157,10 @@ class _PendingCertificatesScreenState extends State<PendingCertificatesScreen> {
                                         style: ElevatedButton.styleFrom(
                                           backgroundColor: AppColors.success,
                                         ),
-                                        child: const Text('Approve'),
+                                        child: const FittedBox(
+                                          fit: BoxFit.scaleDown,
+                                          child: Text('Approve'),
+                                        ),
                                       ),
                                     ),
                                     const SizedBox(width: 8),
@@ -154,7 +170,10 @@ class _PendingCertificatesScreenState extends State<PendingCertificatesScreen> {
                                         style: ElevatedButton.styleFrom(
                                           backgroundColor: AppColors.danger,
                                         ),
-                                        child: const Text('Reject'),
+                                        child: const FittedBox(
+                                          fit: BoxFit.scaleDown,
+                                          child: Text('Reject'),
+                                        ),
                                       ),
                                     ),
                                   ],
@@ -175,15 +194,158 @@ class _PendingCertificatesScreenState extends State<PendingCertificatesScreen> {
     );
   }
 
-  Future<void> _openCertificate(String url) async {
-    if (await canLaunchUrlString(url)) {
-      await launchUrlString(url, mode: LaunchMode.externalApplication);
-    } else {
+  Future<String> _resolveCertificateUrl(String rawUrl) async {
+    final url = rawUrl.trim();
+    if (url.isEmpty) {
+      throw Exception('Certificate link is empty');
+    }
+    if (url.startsWith('http://') || url.startsWith('https://')) {
+      return url;
+    }
+    if (url.startsWith('gs://')) {
+      return FirebaseStorage.instance.refFromURL(url).getDownloadURL();
+    }
+    return FirebaseStorage.instance.ref(url).getDownloadURL();
+  }
+
+  List<String> _previewUrlCandidates(String resolvedUrl) {
+    final base = resolvedUrl.trim();
+    final candidates = <String>{};
+    if (base.isNotEmpty) {
+      candidates.add(base);
+      candidates.add(Uri.encodeFull(base));
+    }
+
+    if (base.contains('res.cloudinary.com') && base.contains('/upload/')) {
+      final transformed = base.replaceFirst(
+        '/upload/',
+        '/upload/f_auto,q_auto/',
+      );
+      candidates.add(transformed);
+      candidates.add(Uri.encodeFull(transformed));
+    }
+
+    return candidates.where((e) => e.isNotEmpty).toList(growable: false);
+  }
+
+  Future<bool> _isDecodableImage(Uint8List bytes) async {
+    try {
+      final codec = await ui.instantiateImageCodec(bytes);
+      await codec.getNextFrame();
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<Uint8List> _fetchPreviewImageBytes(String resolvedUrl) async {
+    final candidates = _previewUrlCandidates(resolvedUrl);
+    for (final candidate in candidates) {
+      final uri = Uri.tryParse(candidate);
+      if (uri == null) continue;
+
+      try {
+        final response = await http.get(uri);
+        if (response.statusCode < 200 || response.statusCode >= 300) {
+          continue;
+        }
+
+        final bytes = response.bodyBytes;
+        if (bytes.isEmpty) continue;
+
+        final contentType =
+            (response.headers['content-type'] ?? '').toLowerCase();
+        if (contentType.startsWith('image/')) {
+          return bytes;
+        }
+
+        final decodable = await _isDecodableImage(bytes);
+        if (decodable) {
+          return bytes;
+        }
+      } catch (_) {
+        continue;
+      }
+    }
+
+    throw Exception('This file cannot be previewed as image.');
+  }
+
+  Future<void> _showImagePreview(String resolvedUrl) async {
+    if (!mounted) return;
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => Dialog(
+        backgroundColor: Colors.transparent,
+        insetPadding: const EdgeInsets.all(12),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(14),
+          child: Container(
+            color: Colors.black,
+            child: Stack(
+              children: [
+                Positioned.fill(
+                  child: FutureBuilder<Uint8List>(
+                    future: _fetchPreviewImageBytes(resolvedUrl),
+                    builder: (context, snapshot) {
+                      if (snapshot.connectionState == ConnectionState.waiting) {
+                        return const Center(
+                          child: CircularProgressIndicator(color: Colors.white70),
+                        );
+                      }
+
+                      if (snapshot.hasError || !snapshot.hasData) {
+                        return Center(
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 18),
+                            child: Text(
+                              'This file cannot be previewed as image.',
+                              textAlign: TextAlign.center,
+                              style: GoogleFonts.poppins(color: Colors.white70),
+                            ),
+                          ),
+                        );
+                      }
+
+                      return InteractiveViewer(
+                        minScale: 1,
+                        maxScale: 5,
+                        child: Image.memory(
+                          snapshot.data!,
+                          fit: BoxFit.contain,
+                        ),
+                      );
+                    },
+                  ),
+                ),
+                Positioned(
+                  top: 8,
+                  right: 8,
+                  child: IconButton(
+                    onPressed: () => Navigator.of(ctx).pop(),
+                    icon: const Icon(Icons.close, color: Colors.white),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _openCertificate(CertificateRequest request) async {
+    try {
+      final resolvedUrl = await _resolveCertificateUrl(request.fileUrl);
+      await _showImagePreview(resolvedUrl);
+    } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('Unable to open certificate link.',
-              style: GoogleFonts.poppins()),
+          content: Text(
+            'Unable to open certificate. ${e.toString().replaceFirst('Exception: ', '')}',
+            style: GoogleFonts.poppins(),
+          ),
           backgroundColor: AppColors.danger,
         ),
       );
