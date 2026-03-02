@@ -1,14 +1,12 @@
 import 'package:flutter/material.dart';
-import 'package:firebase_auth/firebase_auth.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_gradients.dart';
-import '../../models/student_alert_model.dart';
+import '../../services/attendance_service.dart';
 import '../../services/monitor_service.dart';
-import '../../services/notification_service.dart';
 import '../../services/timetable_monitor.dart';
 import 'home/student_home_screen.dart';
-import 'credits/credits_screen.dart';
+import 'attendance/attendance_screen.dart';
 import 'timetable/timetable_screen.dart';
 import 'alerts/alerts_screen.dart';
 import 'profile/student_profile_screen.dart';
@@ -23,126 +21,31 @@ class StudentShell extends StatefulWidget {
 
 class _StudentShellState extends State<StudentShell> {
   int _currentIndex = 0;
-  int _openTasksSignal = 0;
 
-  late List<Widget> _pages;
+  late final List<Widget> _pages;
   final ScreenMonitorService _monitorService = ScreenMonitorService();
   final TimetableMonitor     _timetableMonitor = TimetableMonitor();
-  late final List<String> _studentLookupKeys;
-  late final List<String> _classCandidates;
-  late final String _studentUID;
 
   @override
   void initState() {
     super.initState();
-    _studentUID =
-        (FirebaseAuth.instance.currentUser?.uid ?? widget.studentData['uid'] ?? '')
-            .toString()
-            .trim();
-    _classCandidates = _resolveClassCandidates();
-    _studentLookupKeys = _resolveStudentLookupKeys();
+    final classCandidates = _buildClassCandidates();
+    final studentLookupKeys = _buildStudentLookupKeys();
+    final studentUID = _resolveStudentUid();
     _pages = [
-      StudentHomeScreen(
-        studentData: widget.studentData,
-        openTasksSignal: _openTasksSignal,
-      ),
-      CreditsScreen(studentData: widget.studentData),
+      StudentHomeScreen(studentData: widget.studentData),
+      AttendanceScreen(studentData: widget.studentData),
       TimetableScreen(studentData: widget.studentData),
       AlertsScreen(
-        studentUID: _studentUID,
-        classCandidates: _classCandidates,
-        studentLookupKeys: _studentLookupKeys,
-        onAlertTap: _handleStudentAlertTap,
+        studentUID: studentUID,
+        classCandidates: classCandidates,
+        studentLookupKeys: studentLookupKeys,
       ),
       StudentProfileScreen(studentData: widget.studentData),
     ];
     
     // Start screen monitoring for this student
     _initializeMonitoring();
-    _bootstrapStudentPushRouting();
-  }
-
-  Future<void> _bootstrapStudentPushRouting() async {
-    await NotificationService().initialize();
-    await NotificationService().requestPermissions();
-    await NotificationService().registerFcmForegroundHandlers();
-    NotificationService().setActionHandler(_handleNotificationAction);
-  }
-
-  List<String> _resolveStudentLookupKeys() {
-    final d = widget.studentData;
-    final raw = [
-      _studentUID,
-      d['uid'],
-      d['id'],
-      d['studentId'],
-      d['registrationNumber'],
-      d['regNo'],
-      d['rollNo'],
-      d['email'],
-      d['gmail'],
-    ];
-    final seen = <String>{};
-    final keys = <String>[];
-    for (final value in raw) {
-      if (value == null) continue;
-      final text = value.toString().trim();
-      if (text.isEmpty) continue;
-      if (seen.add(text)) keys.add(text);
-    }
-    return keys;
-  }
-
-  List<String> _resolveClassCandidates() {
-    final d = widget.studentData;
-    final raw = [
-      d['className'],
-      d['ClassName'],
-      d['class'],
-      d['Class'],
-      d['classId'],
-      d['class_id'],
-      d['section'],
-      d['Section'],
-      d['course'],
-      d['department'],
-      d['dept'],
-      d['batch'],
-      d['year'],
-    ];
-    final seen = <String>{};
-    final out = <String>[];
-    for (final value in raw) {
-      if (value == null) continue;
-      final text = value.toString().trim();
-      if (text.isEmpty) continue;
-      if (seen.add(text)) out.add(text);
-    }
-    return out;
-  }
-
-  void _openHomeAndTasks() {
-    setState(() {
-      _currentIndex = 0;
-      _openTasksSignal++;
-      _pages[0] = StudentHomeScreen(
-        studentData: widget.studentData,
-        openTasksSignal: _openTasksSignal,
-      );
-    });
-  }
-
-  void _handleStudentAlertTap(StudentAlert alert) {
-    if (alert.type == StudentAlertType.taskAssigned) {
-      _openHomeAndTasks();
-    }
-  }
-
-  void _handleNotificationAction(NotificationAction action) {
-    final type = action.type.trim().toLowerCase();
-    if (type == 'task_assigned' || type == 'task_alert') {
-      _openHomeAndTasks();
-    }
   }
  
   Future<void> _initializeMonitoring() async {
@@ -171,6 +74,15 @@ class _StudentShellState extends State<StudentShell> {
         ? 'Screen monitoring started for: $studentName'
         : 'Failed to start screen monitoring');
 
+    // ── Create today's attendance record (duplicate-safe) ─────────────────
+    try {
+      await AttendanceService.instance.createAttendance(
+        studentData: widget.studentData,
+      );
+    } catch (e) {
+      debugPrint('[Shell] createAttendance error: $e');
+    }
+
     if (started) {
       // Determine student's class for timetable lookup.
       // 'className' / 'class' / 'section' hold the actual class ID (e.g. CSE_AI_2025).
@@ -190,6 +102,59 @@ class _StudentShellState extends State<StudentShell> {
       ];
       _timetableMonitor.start(candidates);
     }
+  }
+
+  String _resolveStudentUid() {
+    return (widget.studentData['uid'] ??
+            widget.studentData['id'] ??
+            widget.studentData['studentId'] ??
+            widget.studentData['registrationNumber'] ??
+            widget.studentData['regNo'] ??
+            widget.studentData['rollNo'] ??
+            '')
+        .toString()
+        .trim();
+  }
+
+  List<String> _buildClassCandidates() {
+    final raw = <dynamic>[
+      widget.studentData['className'],
+      widget.studentData['class'],
+      widget.studentData['section'],
+      widget.studentData['course'],
+      widget.studentData['batch'],
+    ];
+    final out = <String>[];
+    final seen = <String>{};
+    for (final value in raw) {
+      if (value == null) continue;
+      final text = value.toString().trim();
+      if (text.isEmpty) continue;
+      if (seen.add(text)) out.add(text);
+    }
+    return out;
+  }
+
+  List<String> _buildStudentLookupKeys() {
+    final raw = <dynamic>[
+      widget.studentData['uid'],
+      widget.studentData['id'],
+      widget.studentData['studentId'],
+      widget.studentData['registrationNumber'],
+      widget.studentData['regNo'],
+      widget.studentData['rollNo'],
+      widget.studentData['email'],
+      widget.studentData['gmail'],
+    ];
+    final out = <String>[];
+    final seen = <String>{};
+    for (final value in raw) {
+      if (value == null) continue;
+      final text = value.toString().trim();
+      if (text.isEmpty) continue;
+      if (seen.add(text)) out.add(text);
+    }
+    return out;
   }
 
   void _showUsagePermissionDialog() {
@@ -224,7 +189,6 @@ class _StudentShellState extends State<StudentShell> {
   @override
   void dispose() {
     // Stop timetable monitor first, then the native service
-    NotificationService().setActionHandler(null);
     _timetableMonitor.stop();
     _monitorService.stopMonitoring();
     super.dispose();
@@ -232,7 +196,7 @@ class _StudentShellState extends State<StudentShell> {
 
   static const _navItems = [
     _NavItem(Icons.home_rounded, Icons.home_outlined, 'Home'),
-    _NavItem(Icons.workspace_premium_rounded, Icons.workspace_premium_outlined, 'Credits'),
+    _NavItem(Icons.event_available_rounded, Icons.event_available_outlined, 'Attendance'),
     _NavItem(Icons.calendar_month_rounded, Icons.calendar_month_outlined, 'Schedule'),
     _NavItem(Icons.notifications_rounded, Icons.notifications_outlined, 'Alerts'),
     _NavItem(Icons.person_rounded, Icons.person_outlined, 'Profile'),

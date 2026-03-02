@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
@@ -24,6 +25,8 @@ class _AdminShellState extends State<AdminShell> {
   int _currentIndex = 0;
 
   late final List<Widget> _pages;
+  StreamSubscription<QuerySnapshot>? _violationsSubscription;
+  Timestamp? _shellStartedAt;
 
   @override
   void initState() {
@@ -37,6 +40,7 @@ class _AdminShellState extends State<AdminShell> {
     ];
     _bootstrapAdminPush();
     _setupFcmTokenRefreshListener();
+    _startViolationsListener();
   }
 
   Future<void> _bootstrapAdminPush() async {
@@ -73,6 +77,37 @@ class _AdminShellState extends State<AdminShell> {
     });
   }
 
+  /// Listen for NEW violations in real-time and show local notification.
+  /// This is independent of Render server / Cloud Functions cold starts.
+  void _startViolationsListener() {
+    _shellStartedAt = Timestamp.fromDate(DateTime.now());
+    _violationsSubscription = FirebaseFirestore.instance
+        .collection('violations')
+        .where('timestamp', isGreaterThan: _shellStartedAt)
+        .orderBy('timestamp', descending: true)
+        .limit(1)
+        .snapshots()
+        .listen((snapshot) {
+      for (final change in snapshot.docChanges) {
+        if (change.type == DocumentChangeType.added) {
+          final d = change.doc.data();
+          if (d == null) continue;
+          final name    = (d['name']        ?? 'Student').toString();
+          final period  = (d['period']      ?? 'Unknown').toString();
+          final seconds = (d['secondsUsed'] as num?)?.toInt() ?? 0;
+          debugPrint('[AdminShell] 🔔 New violation detected: $name - $period');
+          NotificationService().showPushNotification(
+            title: '🔔 Violation Detected!',
+            body:  '$name - $period - ${seconds}s phone usage',
+            data:  {'type': 'violation'},
+          );
+        }
+      }
+    }, onError: (e) {
+      debugPrint('[AdminShell] Violations listener error: $e');
+    });
+  }
+
   /// Save FCM token to Firestore admins/{uid} document.
   Future<void> _saveFcmTokenToFirestore(String token) async {
     try {
@@ -89,6 +124,12 @@ class _AdminShellState extends State<AdminShell> {
     } catch (e) {
       debugPrint('[Admin FCM] Save error: $e');
     }
+  }
+
+  @override
+  void dispose() {
+    _violationsSubscription?.cancel();
+    super.dispose();
   }
 
   static const _navItems = [

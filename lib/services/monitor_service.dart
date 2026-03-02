@@ -124,7 +124,7 @@ class ScreenMonitorService {
               headers: {'Content-Type': 'application/json'},
               body: json.encode(payload),
             )
-            .timeout(const Duration(seconds: 65));
+            .timeout(const Duration(seconds: 15));
 
         debugPrint('[FCM] Response Status: ${response.statusCode}');
         debugPrint('[FCM] Response Body: ${response.body}');

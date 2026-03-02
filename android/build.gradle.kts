@@ -1,6 +1,6 @@
-import org.gradle.api.tasks.compile.JavaCompile
-
 plugins {
+    // Add the dependency for the Google services Gradle plugin
+    id("com.google.gms.google-services") version "4.4.4" apply false
 }
 
 allprojects {
@@ -26,10 +26,4 @@ subprojects {
 
 tasks.register<Delete>("clean") {
     delete(rootProject.layout.buildDirectory)
-}
-
-subprojects {
-    tasks.withType<JavaCompile>().configureEach {
-        options.compilerArgs.add("-Xlint:-options")
-    }
 }
