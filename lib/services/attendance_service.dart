@@ -163,12 +163,6 @@ class AttendanceService {
           'logoutTime': FieldValue.serverTimestamp(),
           'logoutType': 'normal',
         }, SetOptions(merge: true));
-        // Notify admins even when no timetable is configured.
-        unawaited(_notifyAdmins(
-          title: '✅ Student Logged Out',
-          body:  '$studentName ($regNo) has logged out successfully.',
-          data:  {'type': 'student_logout', 'studentName': studentName, 'regNo': regNo},
-        ));
         return LogoutResult(
           allowed:       true,
           reason:        'Logout successful.',
@@ -177,9 +171,12 @@ class AttendanceService {
       }
 
       // ── Decision ─────────────────────────────────────────────────────
-      final isLastPeriod = currentPeriod != null &&
-          lastPeriod != null &&
-          currentPeriod.id == lastPeriod.id;
+      // Allow logout if:
+      //   (a) student is currently IN the last period, OR
+      //   (b) current time is PAST the last period end (after school hours)
+      final isLastPeriod = lastPeriod != null &&
+          ((currentPeriod != null && currentPeriod.id == lastPeriod.id) ||
+              currentMinutes >= lastPeriod.endTime);
 
       if (!isLastPeriod) {
         // ── BLOCK LOGOUT: log the early attempt ─────────────────────
@@ -239,17 +236,6 @@ class AttendanceService {
 
       debugPrint('[Attendance] Normal logout recorded: $docId');
 
-      // Notify all admins about normal logout.
-      unawaited(_notifyAdmins(
-        title: '✅ Student Logged Out',
-        body:  '$studentName ($regNo) has logged out successfully.',
-        data:  {
-          'type':        'student_logout',
-          'studentName': studentName,
-          'regNo':       regNo,
-        },
-      ));
-
       return LogoutResult(
         allowed:       true,
         reason:        'Logout successful.',
@@ -282,7 +268,7 @@ class AttendanceService {
               'body': body,
               'data': data,
             }),
-          ).timeout(const Duration(seconds: 65));
+          ).timeout(const Duration(seconds: 15));
           if (response.statusCode == 200) {
             debugPrint('[Attendance] notifyAdmins success via $backendUrl (attempt $attempt)');
             return;

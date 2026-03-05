@@ -223,46 +223,23 @@ exports.notifyAdmins = functions.https.onRequest(async (req, res) => {
 });
 
 /**
- * Cloud Function: Send FCM notification when a new violation is created
- * Triggers automatically when a document is added to 'violations' collection
+ * Cloud Function: Violation post-processing only.
+ *
+ * Admin notification is intentionally sent from app -> backend /notify-admins
+ * to keep a single pipeline and avoid duplicate push fan-out.
  */
 exports.sendViolationNotification = functions.firestore
   .document('violations/{violationId}')
   .onCreate(async (snap, context) => {
     try {
       const violation = snap.data();
-      
-      console.log('🔔 New violation detected:', violation);
-      
-      // Get violation details
-      const studentName = violation.name || 'Unknown';
-      const period = violation.period || 'Unknown';
-      const secondsUsed = violation.secondsUsed || 0;
-      
-      const { successCount, failureCount, tokenCount } = await sendNotificationToAdmins({
-        title: '🔔 Violation Detected!',
-        body: `${studentName} - ${period} - ${secondsUsed}s phone usage`,
-        data: {
-          studentName,
-          period,
-          secondsUsed: secondsUsed.toString(),
-          timestamp: new Date().toISOString(),
-          type: 'violation',
-        },
-      });
 
-      if (tokenCount === 0) {
-        console.log('⚠️ No admin tokens found');
-        return null;
-      }
-
-      console.log(`📊 Success: ${successCount}, Failure: ${failureCount}`);
-
+      console.log('📝 New violation detected (notification handled by app/backend pipeline):', violation);
       await upsertRuleSummaryAlert(violation);
-      return { successCount, failureCount };
+      return { success: true, notificationPipeline: 'app-backend-only' };
       
     } catch (error) {
-      console.error('❌ Error sending notification:', error);
+      console.error('❌ Error processing violation:', error);
       return null;
     }
   });

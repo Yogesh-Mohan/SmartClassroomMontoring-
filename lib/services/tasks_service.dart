@@ -32,7 +32,7 @@ class PendingSubmissionItem {
 
 /// Service for admin-assigned task workflow
 class TasksService {
-  static const Duration _completedRetention = Duration(days: 3);
+  static const Duration _completedRetention = Duration(days: 7);
 
   final FirebaseFirestore _firestore;
   final fs.FirebaseStorage _storage;

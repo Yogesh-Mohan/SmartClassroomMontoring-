@@ -6,6 +6,7 @@ import '../../../core/theme/app_colors.dart';
 import '../../../core/widgets/glass_card.dart';
 import '../../../models/student_alert_model.dart';
 import '../../../services/tasks_service.dart';
+import '../../../utils/date_helpers.dart';
 
 class AlertsScreen extends StatefulWidget {
   final String studentUID;
@@ -27,6 +28,9 @@ class AlertsScreen extends StatefulWidget {
 
 class _AlertsScreenState extends State<AlertsScreen> {
   final TasksService _tasksService = TasksService();
+  int _refreshKey = 0;
+
+  void _retry() => setState(() => _refreshKey++);
 
   IconData _iconFor(StudentAlertType type) {
     switch (type) {
@@ -98,6 +102,7 @@ class _AlertsScreenState extends State<AlertsScreen> {
             const SizedBox(height: 20),
             Expanded(
               child: StreamBuilder<List<TaskWithSubmission>>(
+                key: ValueKey(_refreshKey),
                 stream: _tasksService.streamStudentAssignedTasks(
                   studentUID: widget.studentUID,
                   classCandidates: widget.classCandidates,
@@ -111,16 +116,47 @@ class _AlertsScreenState extends State<AlertsScreen> {
                   }
                   if (snapshot.hasError) {
                     return Center(
-                      child: Text(
-                        'Failed to load task alerts',
-                        style: GoogleFonts.poppins(color: AppColors.textSecondary),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const Icon(Icons.error_outline_rounded,
+                              color: AppColors.danger, size: 40),
+                          const SizedBox(height: 12),
+                          Text('Failed to load alerts',
+                              style: GoogleFonts.poppins(
+                                  color: Colors.white,
+                                  fontWeight: FontWeight.w600,
+                                  fontSize: 14)),
+                          const SizedBox(height: 6),
+                          Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 32),
+                            child: Text(
+                              snapshot.error.toString(),
+                              style: GoogleFonts.poppins(
+                                  color: AppColors.textSecondary, fontSize: 11),
+                              textAlign: TextAlign.center,
+                            ),
+                          ),
+                          const SizedBox(height: 16),
+                          TextButton.icon(
+                            onPressed: _retry,
+                            icon: const Icon(Icons.refresh_rounded,
+                                color: AppColors.lightBlue),
+                            label: Text('Retry',
+                                style: GoogleFonts.poppins(
+                                    color: AppColors.lightBlue,
+                                    fontWeight: FontWeight.w600)),
+                          ),
+                        ],
                       ),
                     );
                   }
 
                   final alerts = (snapshot.data ?? const <TaskWithSubmission>[])
                       .map(_toTaskAlert)
-                      .toList();
+                      .where((alert) => DateHelpers.isInCurrentPeriod(alert.createdAt))
+                      .toList()
+                    ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
                   if (alerts.isEmpty) {
                     return Center(
                       child: Text(

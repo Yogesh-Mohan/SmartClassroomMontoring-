@@ -21,6 +21,7 @@ class MonitoringService : Service() {
         const val CHANNEL_SERVICE         = "smart_monitor_service"
         const val CHANNEL_VIOLATION       = "smart_monitor_violation"
         const val VIOLATION_THRESHOLD     = 20
+        const val VIOLATION_REPEAT_INTERVAL_MS = 2 * 60 * 1000L
 
         @Volatile var isRunning = false
 
@@ -93,6 +94,13 @@ class MonitoringService : Service() {
     private var lastDetectedApp   = "__init__"
     private var lastMonitorActive = false   // tracks previous monitoringActive state
     private var tickCount         = 0
+    private var violationActive   = false
+    private var lastNotificationTimeMs = 0L
+
+    private fun resetViolationState() {
+        violationActive = false
+        lastNotificationTimeMs = 0L
+    }
 
     //  1-second tick loop 
     private val tickRunnable = object : Runnable {
@@ -132,6 +140,7 @@ class MonitoringService : Service() {
                     isBlocked && !timetableOn -> {
                         timerRunning   = false
                         elapsedSeconds = 0
+                        resetViolationState()
                         refreshServiceNotification(
                             "\uD83D\uDFE0 Break Time",
                             "Monitoring is OFF during break"
@@ -141,6 +150,7 @@ class MonitoringService : Service() {
                     else -> {
                         timerRunning   = false
                         elapsedSeconds = 0
+                        resetViolationState()
                         val body = if (timetableOn)
                             "Class time — studying detected"
                         else
@@ -161,9 +171,20 @@ class MonitoringService : Service() {
                     "${elapsedSeconds}s / ${VIOLATION_THRESHOLD}s on restricted app"
                 )
                 if (elapsedSeconds >= VIOLATION_THRESHOLD) {
-                    fireViolationNotification(elapsedSeconds)
-                    elapsedSeconds = 0
+                    val nowMs = System.currentTimeMillis()
+                    val shouldNotify =
+                        !violationActive ||
+                            (nowMs - lastNotificationTimeMs >= VIOLATION_REPEAT_INTERVAL_MS)
+
+                    if (shouldNotify) {
+                        fireViolationNotification(elapsedSeconds)
+                        violationActive = true
+                        lastNotificationTimeMs = nowMs
+                    }
                 }
+            } else {
+                // Once student returns to compliant state, next violation should trigger immediately.
+                resetViolationState()
             }
 
             timerHandler.postDelayed(this, 1_000)
@@ -180,6 +201,7 @@ class MonitoringService : Service() {
                     elapsedSeconds  = 0
                     lastDetectedApp = "__init__"
                     timerRunning    = false
+                    resetViolationState()
                     refreshServiceNotification("Smart Classroom", "Screen ON - detecting app...")
                 }
                 Intent.ACTION_SCREEN_OFF -> {
@@ -188,6 +210,7 @@ class MonitoringService : Service() {
                     timerRunning    = false
                     elapsedSeconds  = 0
                     lastDetectedApp = "__init__"
+                    resetViolationState()
                     refreshServiceNotification("Smart Classroom", "Screen OFF - monitoring paused")
                 }
             }

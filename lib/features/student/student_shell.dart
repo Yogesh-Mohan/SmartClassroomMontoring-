@@ -6,7 +6,7 @@ import '../../services/attendance_service.dart';
 import '../../services/monitor_service.dart';
 import '../../services/timetable_monitor.dart';
 import 'home/student_home_screen.dart';
-import 'attendance/attendance_screen.dart';
+import 'credits/credits_screen.dart';
 import 'timetable/timetable_screen.dart';
 import 'alerts/alerts_screen.dart';
 import 'profile/student_profile_screen.dart';
@@ -34,7 +34,7 @@ class _StudentShellState extends State<StudentShell> {
     final studentUID = _resolveStudentUid();
     _pages = [
       StudentHomeScreen(studentData: widget.studentData),
-      AttendanceScreen(studentData: widget.studentData),
+      CreditsScreen(studentData: widget.studentData),
       TimetableScreen(studentData: widget.studentData),
       AlertsScreen(
         studentUID: studentUID,
@@ -196,7 +196,7 @@ class _StudentShellState extends State<StudentShell> {
 
   static const _navItems = [
     _NavItem(Icons.home_rounded, Icons.home_outlined, 'Home'),
-    _NavItem(Icons.event_available_rounded, Icons.event_available_outlined, 'Attendance'),
+    _NavItem(Icons.workspace_premium_rounded, Icons.workspace_premium_outlined, 'Credits'),
     _NavItem(Icons.calendar_month_rounded, Icons.calendar_month_outlined, 'Schedule'),
     _NavItem(Icons.notifications_rounded, Icons.notifications_outlined, 'Alerts'),
     _NavItem(Icons.person_rounded, Icons.person_outlined, 'Profile'),
