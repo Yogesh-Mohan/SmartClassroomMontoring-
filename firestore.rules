@@ -106,13 +106,13 @@ service cloud.firestore {
     }
 
     // ── ATTENDANCE ────────────────────────────────────────────────────────────
-    // Student can create their own attendance doc (docId = uid_YYYY_MM_DD).
+    // Admin can read ALL attendance docs (required for collection list queries).
     // Student can read/update only their own doc (for logoutTime).
-    // Admin (role == "admin" in admins collection) can read ALL attendance docs.
+    // Student can create their own attendance doc (docId = uid_YYYY_MM_DD).
     match /attendance/{docId} {
       allow read: if request.auth != null
-                  && (resource.data.studentUID == request.auth.uid
-                      || isAdmin());
+                  && (isAdmin()
+                      || resource.data.studentUID == request.auth.uid);
       allow update: if request.auth != null
                     && resource.data.studentUID == request.auth.uid;
       allow create: if request.auth != null

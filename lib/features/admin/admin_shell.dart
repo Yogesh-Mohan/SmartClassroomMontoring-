@@ -27,6 +27,7 @@ class _AdminShellState extends State<AdminShell> {
   late final List<Widget> _pages;
   StreamSubscription<QuerySnapshot>? _violationsSubscription;
   StreamSubscription<QuerySnapshot>? _logoutAttemptsSubscription;
+  StreamSubscription<QuerySnapshot>? _studentLogoutSubscription;
   Timestamp? _shellStartedAt;
 
   @override
@@ -43,6 +44,7 @@ class _AdminShellState extends State<AdminShell> {
     _setupFcmTokenRefreshListener();
     _startViolationsListener();
     _startLogoutAttemptsListener();
+    _startStudentLogoutListener();
   }
 
   Future<void> _bootstrapAdminPush() async {
@@ -89,25 +91,30 @@ class _AdminShellState extends State<AdminShell> {
         .orderBy('timestamp', descending: true)
         .limit(1)
         .snapshots()
-        .listen((snapshot) {
-      for (final change in snapshot.docChanges) {
-        if (change.type == DocumentChangeType.added) {
-          final d = change.doc.data();
-          if (d == null) continue;
-          final name    = (d['name']        ?? 'Student').toString();
-          final period  = (d['period']      ?? 'Unknown').toString();
-          final seconds = (d['secondsUsed'] as num?)?.toInt() ?? 0;
-          debugPrint('[AdminShell] 🔔 New violation detected: $name - $period');
-          NotificationService().showPushNotification(
-            title: '🔔 Violation Detected!',
-            body:  '$name - $period - ${seconds}s phone usage',
-            data:  {'type': 'violation'},
-          );
-        }
-      }
-    }, onError: (e) {
-      debugPrint('[AdminShell] Violations listener error: $e');
-    });
+        .listen(
+          (snapshot) {
+            for (final change in snapshot.docChanges) {
+              if (change.type == DocumentChangeType.added) {
+                final d = change.doc.data();
+                if (d == null) continue;
+                final name = (d['name'] ?? 'Student').toString();
+                final period = (d['period'] ?? 'Unknown').toString();
+                final seconds = (d['secondsUsed'] as num?)?.toInt() ?? 0;
+                debugPrint(
+                  '[AdminShell] 🔔 New violation detected: $name - $period',
+                );
+                NotificationService().showPushNotification(
+                  title: '🔔 Violation Detected!',
+                  body: '$name - $period - ${seconds}s phone usage',
+                  data: {'type': 'violation'},
+                );
+              }
+            }
+          },
+          onError: (e) {
+            debugPrint('[AdminShell] Violations listener error: $e');
+          },
+        );
   }
 
   /// Listen for NEW early-logout attempts and show local notification.
@@ -119,26 +126,79 @@ class _AdminShellState extends State<AdminShell> {
         .orderBy('attemptTime', descending: true)
         .limit(1)
         .snapshots()
-        .listen((snapshot) {
-      for (final change in snapshot.docChanges) {
-        if (change.type == DocumentChangeType.added) {
-          final d = change.doc.data();
-          if (d == null) continue;
-          final name   = (d['studentName'] ?? 'Student').toString();
-          final regNo  = (d['regNo']       ?? '').toString();
-          final period = (d['period']      ?? 'Unknown').toString();
-          final label  = regNo.isNotEmpty ? '$name ($regNo)' : name;
-          debugPrint('[AdminShell] 🔔 Early logout attempt: $label - $period');
-          NotificationService().showPushNotification(
-            title: '⚠️ Early Logout Attempt',
-            body:  '$label tried to logout during $period.',
-            data:  {'type': 'early_logout'},
-          );
-        }
-      }
-    }, onError: (e) {
-      debugPrint('[AdminShell] Logout attempts listener error: $e');
-    });
+        .listen(
+          (snapshot) {
+            for (final change in snapshot.docChanges) {
+              if (change.type == DocumentChangeType.added) {
+                final d = change.doc.data();
+                if (d == null) continue;
+                final name = (d['studentName'] ?? 'Student').toString();
+                final regNo = (d['regNo'] ?? '').toString();
+                final period = (d['period'] ?? 'Unknown').toString();
+                final label = regNo.isNotEmpty ? '$name ($regNo)' : name;
+                debugPrint(
+                  '[AdminShell] 🔔 Early logout attempt: $label - $period',
+                );
+                NotificationService().showPushNotification(
+                  title: '⚠️ Early Logout Attempt',
+                  body: '$label tried to logout during $period.',
+                  data: {'type': 'early_logout'},
+                );
+              }
+            }
+          },
+          onError: (e) {
+            debugPrint('[AdminShell] Logout attempts listener error: $e');
+          },
+        );
+  }
+
+  /// Listen for student logouts — fires when logoutTime is written to an
+  /// attendance doc. Shows a local notification immediately on admin device.
+  void _startStudentLogoutListener() {
+    final since = _shellStartedAt ?? Timestamp.fromDate(DateTime.now());
+    final todayKey = () {
+      final now = DateTime.now();
+      return '${now.year.toString().padLeft(4, '0')}_'
+          '${now.month.toString().padLeft(2, '0')}_'
+          '${now.day.toString().padLeft(2, '0')}';
+    }();
+
+    _studentLogoutSubscription = FirebaseFirestore.instance
+        .collection('attendance')
+        .where('date', isEqualTo: todayKey)
+        .where('logoutTime', isGreaterThan: since)
+        .snapshots()
+        .listen(
+          (snapshot) {
+            for (final change in snapshot.docChanges) {
+              // Only react when logoutTime is first written (added or modified)
+              if (change.type == DocumentChangeType.added ||
+                  change.type == DocumentChangeType.modified) {
+                final d = change.doc.data();
+                if (d == null) continue;
+                final lt = d['logoutTime'];
+                if (lt == null) continue; // logoutTime not yet set
+                if (lt is Timestamp && lt.compareTo(since) <= 0) continue;
+                final name = (d['studentName'] ?? d['name'] ?? 'Student')
+                    .toString();
+                final regNo = (d['regNo'] ?? '').toString();
+                final label = regNo.isNotEmpty ? '$name ($regNo)' : name;
+                final lType = (d['logoutType'] ?? '').toString();
+                final isEarly = lType == 'early';
+                debugPrint('[AdminShell] 🚪 Student logout detected: $label');
+                NotificationService().showPushNotification(
+                  title: isEarly ? '⚠️ Early Logout' : '🚪 Student Logged Out',
+                  body: '$label has logged out.',
+                  data: {'type': 'student_logout'},
+                );
+              }
+            }
+          },
+          onError: (e) {
+            debugPrint('[AdminShell] Student logout listener error: $e');
+          },
+        );
   }
 
   /// Save FCM token to Firestore admins/{uid} document.
@@ -149,10 +209,9 @@ class _AdminShellState extends State<AdminShell> {
         debugPrint('[Admin FCM] Save failed: no current user UID');
         return;
       }
-      await FirebaseFirestore.instance
-          .collection('admins')
-          .doc(uid)
-          .set({'fcmToken': token}, SetOptions(merge: true));
+      await FirebaseFirestore.instance.collection('admins').doc(uid).set({
+        'fcmToken': token,
+      }, SetOptions(merge: true));
       debugPrint('[Admin FCM] Token saved to Firestore: admins/$uid');
     } catch (e) {
       debugPrint('[Admin FCM] Save error: $e');
@@ -163,15 +222,24 @@ class _AdminShellState extends State<AdminShell> {
   void dispose() {
     _violationsSubscription?.cancel();
     _logoutAttemptsSubscription?.cancel();
+    _studentLogoutSubscription?.cancel();
     super.dispose();
   }
 
   static const _navItems = [
-    _NavItem(Icons.dashboard_rounded,      Icons.dashboard_outlined,       'Dashboard'),
-    _NavItem(Icons.insights_rounded,  Icons.insights_outlined,   'Insights'),
-    _NavItem(Icons.warning_amber_rounded,  Icons.warning_amber_outlined,   'Violations'),
-    _NavItem(Icons.notifications_rounded,  Icons.notifications_outlined,   'Alerts'),
-    _NavItem(Icons.person_rounded,         Icons.person_outlined,          'Profile'),
+    _NavItem(Icons.dashboard_rounded, Icons.dashboard_outlined, 'Dashboard'),
+    _NavItem(Icons.insights_rounded, Icons.insights_outlined, 'Insights'),
+    _NavItem(
+      Icons.warning_amber_rounded,
+      Icons.warning_amber_outlined,
+      'Violations',
+    ),
+    _NavItem(
+      Icons.notifications_rounded,
+      Icons.notifications_outlined,
+      'Alerts',
+    ),
+    _NavItem(Icons.person_rounded, Icons.person_outlined, 'Profile'),
   ];
 
   @override
@@ -179,10 +247,7 @@ class _AdminShellState extends State<AdminShell> {
     return Scaffold(
       body: Container(
         decoration: const BoxDecoration(gradient: AppGradients.primaryVertical),
-        child: IndexedStack(
-          index: _currentIndex,
-          children: _pages,
-        ),
+        child: IndexedStack(index: _currentIndex, children: _pages),
       ),
       bottomNavigationBar: _buildNav(),
     );
@@ -193,11 +258,10 @@ class _AdminShellState extends State<AdminShell> {
       decoration: BoxDecoration(
         color: const Color(0xFF050520),
         border: Border(
-            top: BorderSide(
-                color: Colors.white.withValues(alpha: 0.1), width: 1)),
+          top: BorderSide(color: Colors.white.withValues(alpha: 0.1), width: 1),
+        ),
         boxShadow: [
-          BoxShadow(
-              color: Colors.black.withValues(alpha: 0.4), blurRadius: 12)
+          BoxShadow(color: Colors.black.withValues(alpha: 0.4), blurRadius: 12),
         ],
       ),
       padding: const EdgeInsets.only(bottom: 6, top: 6),

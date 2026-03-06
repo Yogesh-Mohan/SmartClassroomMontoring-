@@ -46,8 +46,7 @@ class AttendanceService {
     return '${y}_${m}_$d'; // e.g. 2026_02_27
   }
 
-  String _currentDayName() =>
-      _dayNames[DateTime.now().weekday] ?? 'Monday';
+  String _currentDayName() => _dayNames[DateTime.now().weekday] ?? 'Monday';
 
   // ── 1. CREATE ATTENDANCE ──────────────────────────────────────────────────
 
@@ -64,10 +63,10 @@ class AttendanceService {
     final user = _auth.currentUser;
     if (user == null) throw StateError('No authenticated user found.');
 
-    final uid       = user.uid;
-    final dateKey   = _todayDateKey();
-    final docId     = '${uid}_$dateKey';
-    final docRef    = _db.collection('attendance').doc(docId);
+    final uid = user.uid;
+    final dateKey = _todayDateKey();
+    final docId = '${uid}_$dateKey';
+    final docRef = _db.collection('attendance').doc(docId);
 
     try {
       // ── Duplicate guard ──────────────────────────────────────────────
@@ -79,13 +78,12 @@ class AttendanceService {
 
       // ── Create attendance record ─────────────────────────────────────
       await docRef.set({
-        'studentUID':  uid,
-        'studentName': studentData['name']  ??
-                       studentData['studentName'] ?? '',
-        'regNo':       studentData['regNo'] ??
-                       studentData['registrationNumber'] ?? '',
-        'date':        dateKey,
-        'loginTime':   FieldValue.serverTimestamp(),
+        'studentUID': uid,
+        'studentName': studentData['name'] ?? studentData['studentName'] ?? '',
+        'regNo':
+            studentData['regNo'] ?? studentData['registrationNumber'] ?? '',
+        'date': dateKey,
+        'loginTime': FieldValue.serverTimestamp(),
         // NOTE: logoutTime and logoutType are intentionally NOT set here.
       });
 
@@ -113,24 +111,25 @@ class AttendanceService {
     final user = _auth.currentUser;
     if (user == null) throw StateError('No authenticated user found.');
 
-    final uid          = user.uid;
-    final studentName  = (studentData['name'] ??
-                          studentData['studentName'] ?? '') as String;
-    final regNo        = (studentData['regNo'] ??
-                          studentData['registrationNumber'] ?? '') as String;
+    final uid = user.uid;
+    final studentName =
+        (studentData['name'] ?? studentData['studentName'] ?? '') as String;
+    final regNo =
+        (studentData['regNo'] ?? studentData['registrationNumber'] ?? '')
+            as String;
 
     try {
       // ── Fetch today's timetable ──────────────────────────────────────
-        final dayName  = _currentDayName();
-        final lowerDay = dayName.toLowerCase();
-        final classIdNormalized = classId.trim();
+      final dayName = _currentDayName();
+      final lowerDay = dayName.toLowerCase();
+      final classIdNormalized = classId.trim();
 
-        final periods = classIdNormalized.isEmpty
+      final periods = classIdNormalized.isEmpty
           ? <_PeriodInfo>[]
           : await _fetchPeriods(classIdNormalized, dayName, lowerDay);
 
       // ── Determine current period & last period ───────────────────────
-      final now            = DateTime.now();
+      final now = DateTime.now();
       final currentMinutes = now.hour * 60 + now.minute;
 
       _PeriodInfo? currentPeriod;
@@ -147,14 +146,18 @@ class AttendanceService {
         }
       }
 
-      debugPrint('[Attendance] currentMinutes=$currentMinutes, '
-          'currentPeriod=${currentPeriod?.id}, lastPeriod=${lastPeriod?.id}');
+      debugPrint(
+        '[Attendance] currentMinutes=$currentMinutes, '
+        'currentPeriod=${currentPeriod?.id}, lastPeriod=${lastPeriod?.id}',
+      );
 
       // ── If no timetable found, allow logout gracefully ─────────────────
       if (periods.isEmpty) {
-        debugPrint('[Attendance] No timetable found for ${classIdNormalized.isEmpty ? 'unknown class' : classIdNormalized} — allowing logout.');
+        debugPrint(
+          '[Attendance] No timetable found for ${classIdNormalized.isEmpty ? 'unknown class' : classIdNormalized} — allowing logout.',
+        );
         final dateKey2 = _todayDateKey();
-        final docId2   = '${uid}_$dateKey2';
+        final docId2 = '${uid}_$dateKey2';
         await _db.collection('attendance').doc(docId2).set({
           'studentUID': uid,
           'studentName': studentName,
@@ -164,8 +167,8 @@ class AttendanceService {
           'logoutType': 'normal',
         }, SetOptions(merge: true));
         return LogoutResult(
-          allowed:       true,
-          reason:        'Logout successful.',
+          allowed: true,
+          reason: 'Logout successful.',
           currentPeriod: '',
         );
       }
@@ -174,7 +177,8 @@ class AttendanceService {
       // Allow logout if:
       //   (a) student is currently IN the last period, OR
       //   (b) current time is PAST the last period end (after school hours)
-      final isLastPeriod = lastPeriod != null &&
+      final isLastPeriod =
+          lastPeriod != null &&
           ((currentPeriod != null && currentPeriod.id == lastPeriod.id) ||
               currentMinutes >= lastPeriod.endTime);
 
@@ -185,36 +189,43 @@ class AttendanceService {
         // Attempt to log — silently ignore if rules not deployed yet.
         try {
           await _db.collection('logout_attempts').add({
-            'studentUID':   uid,
-            'studentName':  studentName,
-            'regNo':        regNo,
-            'period':       periodLabel,
-            'attemptTime':  FieldValue.serverTimestamp(),
-            'type':         'early_logout',
+            'studentUID': uid,
+            'studentName': studentName,
+            'regNo': regNo,
+            'period': periodLabel,
+            'attemptTime': FieldValue.serverTimestamp(),
+            'type': 'early_logout',
           });
         } catch (e) {
-          debugPrint('[Attendance] logout_attempts write failed (check rules deployed): $e');
+          debugPrint(
+            '[Attendance] logout_attempts write failed (check rules deployed): $e',
+          );
         }
 
         // Path 1: Firestore listener in admin_shell catches this immediately
         //         when admin app is open/background.
         // Path 2: Render backend wakes up and sends FCM push (handles app-killed).
-        final displayPeriod = periodLabel == 'unknown' ? 'Outside Class Hours' : periodLabel;
-        unawaited(_notifyAdmins(
-          title: '⚠️ Early Logout Attempt',
-          body:  '$studentName ($regNo) tried to logout during $displayPeriod.',
-          data:  {
-            'type':        'early_logout',
-            'studentName': studentName,
-            'regNo':       regNo,
-            'period':      displayPeriod,
-          },
-        ));
+        final displayPeriod = periodLabel == 'unknown'
+            ? 'Outside Class Hours'
+            : periodLabel;
+        unawaited(
+          _notifyAdmins(
+            title: '⚠️ Early Logout Attempt',
+            body:
+                '$studentName ($regNo) tried to logout during $displayPeriod.',
+            data: {
+              'type': 'early_logout',
+              'studentName': studentName,
+              'regNo': regNo,
+              'period': displayPeriod,
+            },
+          ),
+        );
         debugPrint('[Attendance] Early logout blocked. Period: $periodLabel');
 
         return LogoutResult(
           allowed: false,
-          reason:  currentPeriod != null
+          reason: currentPeriod != null
               ? 'You are in $periodLabel. Logout is only allowed after the last period.'
               : 'No active period found. Logout is blocked outside class hours.',
           currentPeriod: periodLabel,
@@ -223,8 +234,8 @@ class AttendanceService {
 
       // ── ALLOW LOGOUT: update attendance document ─────────────────
       final dateKey = _todayDateKey();
-      final docId   = '${uid}_$dateKey';
-      final docRef  = _db.collection('attendance').doc(docId);
+      final docId = '${uid}_$dateKey';
+      final docRef = _db.collection('attendance').doc(docId);
 
       await docRef.set({
         'studentUID': uid,
@@ -237,9 +248,24 @@ class AttendanceService {
 
       debugPrint('[Attendance] Normal logout recorded: $docId');
 
+      // ── Notify admins that a student has logged out ──────────────────
+      final regoLabel = regNo.isNotEmpty ? ' ($regNo)' : '';
+      unawaited(
+        _notifyAdmins(
+          title: '🚪 Student Logged Out',
+          body: '$studentName$regoLabel has logged out.',
+          data: {
+            'type': 'student_logout',
+            'studentName': studentName,
+            'regNo': regNo,
+            'period': lastPeriod.id,
+          },
+        ),
+      );
+
       return LogoutResult(
-        allowed:       true,
-        reason:        'Logout successful.',
+        allowed: true,
+        reason: 'Logout successful.',
         currentPeriod: lastPeriod.id,
       );
     } catch (e, st) {
@@ -259,11 +285,13 @@ class AttendanceService {
         'https://smartclassroommontoring-system.onrender.com/notify-admins';
     try {
       // 90-second timeout to handle Render free-tier cold start (~50s wake-up).
-      final response = await http.post(
-        Uri.parse(backendUrl),
-        headers: {'Content-Type': 'application/json'},
-        body: json.encode({'title': title, 'body': body, 'data': data}),
-      ).timeout(const Duration(seconds: 90));
+      final response = await http
+          .post(
+            Uri.parse(backendUrl),
+            headers: {'Content-Type': 'application/json'},
+            body: json.encode({'title': title, 'body': body, 'data': data}),
+          )
+          .timeout(const Duration(seconds: 90));
       debugPrint('[Attendance] notifyAdmins HTTP ${response.statusCode}');
     } catch (e) {
       debugPrint('[Attendance] notifyAdmins failed: $e');
@@ -273,7 +301,10 @@ class AttendanceService {
   // ── Internal: fetch period docs ───────────────────────────────────────────
 
   Future<List<_PeriodInfo>> _fetchPeriods(
-      String classId, String dayName, String lowerDay) async {
+    String classId,
+    String dayName,
+    String lowerDay,
+  ) async {
     // Try title-case day, then lowercase (mirrors TimetableMonitor behaviour)
     var snap = await _db
         .collection('timetables')
@@ -290,9 +321,9 @@ class AttendanceService {
     }
 
     return snap.docs.map((doc) {
-      final data      = doc.data();
+      final data = doc.data();
       final startTime = (data['startTime'] as num?)?.toInt() ?? 0;
-      final endTime   = (data['endTime']   as num?)?.toInt() ?? 0;
+      final endTime = (data['endTime'] as num?)?.toInt() ?? 0;
       return _PeriodInfo(id: doc.id, startTime: startTime, endTime: endTime);
     }).toList();
   }
@@ -303,7 +334,7 @@ class AttendanceService {
 class _PeriodInfo {
   final String id;
   final int startTime; // minutes from midnight
-  final int endTime;   // minutes from midnight
+  final int endTime; // minutes from midnight
   const _PeriodInfo({
     required this.id,
     required this.startTime,
