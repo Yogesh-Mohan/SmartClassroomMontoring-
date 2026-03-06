@@ -22,6 +22,7 @@ class _AddInteractionScoreScreenState extends State<AddInteractionScoreScreen> {
 
   String? _selectedStudentId;
   String? _selectedStudentName;
+  String _selectedStudentUid = '';
   String _subjectId = 'subject-1';
   String _subjectName = 'Subject';
   String _semester = 'S1';
@@ -141,6 +142,8 @@ class _AddInteractionScoreScreenState extends State<AddInteractionScoreScreen> {
                   _selectedStudentName =
                       (selected['name'] ?? selected['studentName'] ?? 'Student')
                           .toString();
+                  _selectedStudentUid =
+                      (selected['uid'] ?? value ?? '').toString();
                   _semester = (selected['semester'] ?? selected['sem'] ?? 'S1').toString();
                 });
               },
@@ -224,6 +227,7 @@ class _AddInteractionScoreScreenState extends State<AddInteractionScoreScreen> {
         teacherName: (widget.teacherData['name'] ?? 'Teacher').toString(),
         studentId: _selectedStudentId!,
         studentName: _selectedStudentName!,
+        studentUid: _selectedStudentUid,
         subjectId: _subjectId.trim(),
         subjectName: _subjectName.trim().isEmpty ? 'Subject' : _subjectName.trim(),
         semester: _semester,

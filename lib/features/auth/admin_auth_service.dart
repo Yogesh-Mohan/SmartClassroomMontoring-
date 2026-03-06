@@ -105,8 +105,19 @@ class AdminAuthService {
         throw Exception('Admin profile not found. Contact your administrator.');
       }
       final doc = snap.docs.first;
+      final data = doc.data();
       await doc.reference.update({'uid': uid}).catchError((_) {});
-      return {'id': doc.id, ...doc.data()};
+
+      // Ensure a deterministic admins/{uid} document exists for security-rule checks.
+      // This avoids permission issues when legacy admin docs are keyed by random IDs.
+      await _firestore.collection('admins').doc(uid).set({
+        'uid': uid,
+        'email': email,
+        ...data,
+        'syncedAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true)).catchError((_) {});
+
+      return {'id': doc.id, ...data};
     } on FirebaseException catch (e) {
       if (e.code == 'permission-denied') {
         throw Exception(

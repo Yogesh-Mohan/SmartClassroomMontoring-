@@ -182,6 +182,9 @@ class _NotificationScreenState extends State<NotificationScreen>
         comment: comment,
       );
 
+      if (mounted) {
+        setState(() {});
+      }
       _showSnack(accepted ? 'Marked as accepted' : 'Marked as rejected');
 
       final token = await _getStudentFcmToken(item.submission.studentUID);

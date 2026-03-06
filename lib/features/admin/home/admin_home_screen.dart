@@ -26,6 +26,11 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
 
   String get _name => widget.adminData['name'] ?? 'Admin';
 
+  String _monthShort(int m) {
+    const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    return months[m - 1];
+  }
+
   void _openStudentsList(String title, Stream<List<AdminStudentRow>> stream) {
     Navigator.push(
       context,
@@ -146,7 +151,7 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
                   icon: Icons.how_to_reg_rounded,
                   color: AppColors.success,
                   onTap: () => _openStudentsList(
-                    'Logged In Now',
+                    'Present Today Students',
                     _dashboardService.streamPresentTodayList(),
                   ),
                 ),
@@ -172,87 +177,146 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
 
             const SizedBox(height: 24),
 
-            // Enrolment trend chart
-            GlassCard(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text('Attendance Trend (This Week)',
-                      style: GoogleFonts.poppins(
-                          fontSize: 14,
-                          fontWeight: FontWeight.w600,
-                          color: Colors.white)),
-                  const SizedBox(height: 16),
-                  SizedBox(
-                    height: 150,
-                    child: LineChart(
-                      LineChartData(
-                        gridData: FlGridData(
-                          show: true,
-                          getDrawingHorizontalLine: (_) => FlLine(
-                            color: Colors.white.withValues(alpha: 0.07),
-                            strokeWidth: 1,
-                          ),
-                          drawVerticalLine: false,
-                        ),
-                        titlesData: FlTitlesData(
-                          leftTitles: const AxisTitles(
-                              sideTitles: SideTitles(showTitles: false)),
-                          rightTitles: const AxisTitles(
-                              sideTitles: SideTitles(showTitles: false)),
-                          topTitles: const AxisTitles(
-                              sideTitles: SideTitles(showTitles: false)),
-                          bottomTitles: AxisTitles(
-                            sideTitles: SideTitles(
-                              showTitles: true,
-                              getTitlesWidget: (v, _) {
-                                const days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'];
-                                final i = v.toInt();
-                                if (i < 0 || i >= days.length) {
-                                  return const SizedBox.shrink();
-                                }
-                                return Text(days[i],
+            // Weekly violations bar chart
+            StreamBuilder<List<AdminDailyViolation>>(
+              stream: _dashboardService.streamWeeklyViolationChart(),
+              builder: (context, snapshot) {
+                final days = snapshot.data ?? [];
+                final maxY = days.isEmpty
+                    ? 1.0
+                    : days
+                            .map((d) => d.count)
+                            .reduce((a, b) => a > b ? a : b)
+                            .toDouble() +
+                        1;
+                return GlassCard(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('Phone Violations (Last 7 Days)',
+                          style: GoogleFonts.poppins(
+                              fontSize: 14,
+                              fontWeight: FontWeight.w600,
+                              color: Colors.white)),
+                      const SizedBox(height: 4),
+                      Text('Date · Top violating student shown',
+                          style: GoogleFonts.poppins(
+                              fontSize: 11,
+                              color: AppColors.textSecondary)),
+                      const SizedBox(height: 16),
+                      SizedBox(
+                        height: 180,
+                        child: days.isEmpty
+                            ? Center(
+                                child: Text('No data',
                                     style: GoogleFonts.poppins(
-                                        fontSize: 10,
-                                        color: AppColors.textSecondary));
-                              },
-                            ),
-                          ),
-                        ),
-                        borderData: FlBorderData(show: false),
-                        lineBarsData: [
-                          LineChartBarData(
-                            spots: const [
-                              FlSpot(0, 108),
-                              FlSpot(1, 115),
-                              FlSpot(2, 110),
-                              FlSpot(3, 112),
-                              FlSpot(4, 120),
-                            ],
-                            isCurved: true,
-                            color: AppColors.success,
-                            barWidth: 3,
-                            dotData: FlDotData(
-                              show: true,
-                              getDotPainter: (spot, _, _, _) =>
-                                  FlDotCirclePainter(
-                                radius: 4,
-                                color: AppColors.success,
-                                strokeWidth: 2,
-                                strokeColor: Colors.white,
+                                        fontSize: 13,
+                                        color: AppColors.textSecondary)),
+                              )
+                            : BarChart(
+                                BarChartData(
+                                  maxY: maxY,
+                                  barGroups: days.asMap().entries.map((e) {
+                                    final hasViolation = e.value.count > 0;
+                                    return BarChartGroupData(
+                                      x: e.key,
+                                      barRods: [
+                                        BarChartRodData(
+                                          toY: e.value.count.toDouble(),
+                                          color: hasViolation
+                                              ? AppColors.danger
+                                              : Colors.white
+                                                  .withValues(alpha: 0.1),
+                                          width: 26,
+                                          borderRadius:
+                                              const BorderRadius.vertical(
+                                                  top: Radius.circular(6)),
+                                        ),
+                                      ],
+                                    );
+                                  }).toList(),
+                                  titlesData: FlTitlesData(
+                                    bottomTitles: AxisTitles(
+                                      sideTitles: SideTitles(
+                                        showTitles: true,
+                                        reservedSize: 46,
+                                        getTitlesWidget: (v, _) {
+                                          final i = v.toInt();
+                                          if (i < 0 || i >= days.length) {
+                                            return const SizedBox.shrink();
+                                          }
+                                          final d = days[i].date;
+                                          final dateStr =
+                                              '${d.day} ${_monthShort(d.month)}';
+                                          final name = days[i].topName;
+                                          return Padding(
+                                            padding:
+                                                const EdgeInsets.only(top: 4),
+                                            child: Column(
+                                              mainAxisSize: MainAxisSize.min,
+                                              children: [
+                                                Text(dateStr,
+                                                    style: GoogleFonts.poppins(
+                                                        fontSize: 9,
+                                                        color: AppColors
+                                                            .textSecondary)),
+                                                Text(
+                                                  name.isEmpty
+                                                      ? '—'
+                                                      : (name.length > 6
+                                                          ? '${name.substring(0, 6)}..'
+                                                          : name),
+                                                  style: GoogleFonts.poppins(
+                                                      fontSize: 8,
+                                                      fontWeight:
+                                                          FontWeight.w600,
+                                                      color: name.isEmpty
+                                                          ? AppColors
+                                                              .textSecondary
+                                                          : AppColors.danger),
+                                                ),
+                                              ],
+                                            ),
+                                          );
+                                        },
+                                      ),
+                                    ),
+                                    leftTitles: const AxisTitles(
+                                        sideTitles:
+                                            SideTitles(showTitles: false)),
+                                    rightTitles: const AxisTitles(
+                                        sideTitles:
+                                            SideTitles(showTitles: false)),
+                                    topTitles: const AxisTitles(
+                                        sideTitles:
+                                            SideTitles(showTitles: false)),
+                                  ),
+                                  gridData: const FlGridData(show: false),
+                                  borderData: FlBorderData(show: false),
+                                  barTouchData: BarTouchData(
+                                    touchTooltipData: BarTouchTooltipData(
+                                      getTooltipColor: (_) => Colors.black87,
+                                      getTooltipItem: (group, _, rod, __) {
+                                        final d = days[group.x];
+                                        final count = rod.toY.toInt();
+                                        return BarTooltipItem(
+                                          count == 0
+                                              ? 'No violations'
+                                              : '${d.topName}\n$count violation${count == 1 ? '' : 's'}',
+                                          GoogleFonts.poppins(
+                                              fontSize: 11,
+                                              color: Colors.white),
+                                        );
+                                      },
+                                    ),
+                                  ),
+                                ),
                               ),
-                            ),
-                            belowBarData: BarAreaData(
-                              show: true,
-                              color: AppColors.success.withValues(alpha: 0.12),
-                            ),
-                          ),
-                        ],
                       ),
-                    ),
+                    ],
                   ),
-                ],
-              ),
+                );
+              },
             ).animate().fadeIn(delay: 250.ms).slideY(begin: 0.1, end: 0),
 
             const SizedBox(height: 20),
@@ -266,10 +330,39 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
                 .animate()
                 .fadeIn(delay: 350.ms),
             const SizedBox(height: 12),
-            ..._recentAlerts.map((a) => Padding(
-                  padding: const EdgeInsets.only(bottom: 10),
-                  child: _AlertTile(a).animate().fadeIn(delay: 400.ms),
-                )),
+            StreamBuilder<List<AdminAlertRow>>(
+              stream: _dashboardService.streamRecentUniqueAlerts(),
+              builder: (context, snapshot) {
+                if (snapshot.connectionState == ConnectionState.waiting) {
+                  return const Center(
+                    child: Padding(
+                      padding: EdgeInsets.all(16),
+                      child: CircularProgressIndicator(
+                          color: AppColors.danger, strokeWidth: 2),
+                    ),
+                  );
+                }
+                final alerts = snapshot.data ?? [];
+                if (alerts.isEmpty) {
+                  return Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                    child: Text(
+                      'No alerts today.',
+                      style: GoogleFonts.poppins(
+                          fontSize: 13, color: AppColors.textSecondary),
+                    ),
+                  );
+                }
+                return Column(
+                  children: alerts
+                      .map((a) => Padding(
+                            padding: const EdgeInsets.only(bottom: 10),
+                            child: _AlertTile(a).animate().fadeIn(delay: 400.ms),
+                          ))
+                      .toList(),
+                );
+              },
+            ),
           ],
         ),
       ),
@@ -277,25 +370,18 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
   }
 }
 
-const _recentAlerts = [
-  _AlertInfo('Juan Santos — Low Attendance', '65% — Chemistry',
-      AppColors.danger),
-  _AlertInfo('Maria Cruz — Assignment Pending', 'Math Assignment overdue',
-      AppColors.warning),
-  _AlertInfo('Pedro Reyes — Absent 3 Days', 'Consecutive absences',
-      AppColors.warning),
-];
-
-class _AlertInfo {
-  final String name;
-  final String detail;
-  final Color color;
-  const _AlertInfo(this.name, this.detail, this.color);
-}
 
 class _AlertTile extends StatelessWidget {
-  final _AlertInfo a;
+  final AdminAlertRow a;
   const _AlertTile(this.a);
+
+  String _timeLabel() {
+    final dt = a.timestamp.toLocal();
+    final h = dt.hour > 12 ? dt.hour - 12 : (dt.hour == 0 ? 12 : dt.hour);
+    final m = dt.minute.toString().padLeft(2, '0');
+    final ap = dt.hour >= 12 ? 'PM' : 'AM';
+    return '$h:$m $ap';
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -304,11 +390,12 @@ class _AlertTile extends StatelessWidget {
       decoration: BoxDecoration(
         color: Colors.white.withValues(alpha: 0.07),
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: a.color.withValues(alpha: 0.3), width: 1),
+        border: Border.all(
+            color: AppColors.danger.withValues(alpha: 0.3), width: 1),
       ),
       child: Row(
         children: [
-          Icon(Icons.circle, color: a.color, size: 10),
+          Icon(Icons.circle, color: AppColors.danger, size: 10),
           const SizedBox(width: 12),
           Expanded(
             child: Column(
@@ -319,7 +406,7 @@ class _AlertTile extends StatelessWidget {
                         fontSize: 13,
                         fontWeight: FontWeight.w500,
                         color: Colors.white)),
-                Text(a.detail,
+                Text('${a.period}  •  ${_timeLabel()}',
                     style: GoogleFonts.poppins(
                         fontSize: 11, color: AppColors.textSecondary)),
               ],

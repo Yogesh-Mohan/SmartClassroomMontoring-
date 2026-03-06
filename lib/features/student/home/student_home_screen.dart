@@ -71,7 +71,9 @@ class _StudentHomeScreenState extends State<StudentHomeScreen> {
       widget.studentData['class'],
       widget.studentData['section'],
       widget.studentData['course'],
+      widget.studentData['department'],
       widget.studentData['batch'],
+      widget.studentData['classId'],
     ];
     final out = <String>[];
     final seen = <String>{};
@@ -85,6 +87,7 @@ class _StudentHomeScreenState extends State<StudentHomeScreen> {
 
   List<String> get _studentLookupKeys {
     final raw = <dynamic>[
+      FirebaseAuth.instance.currentUser?.uid,
       widget.studentData['uid'],
       widget.studentData['id'],
       widget.studentData['studentId'],
@@ -113,25 +116,25 @@ class _StudentHomeScreenState extends State<StudentHomeScreen> {
         .where('studentUID', isEqualTo: uid)
         .snapshots()
         .map((snap) {
-      final dates = snap.docs
-          .map((d) {
-            final raw = d.data()['date'];
-            if (raw is Timestamp) return raw.toDate();
-            if (raw is String) return DateTime.tryParse(raw);
-            return null;
-          })
-          .whereType<DateTime>()
-          .map((dt) => DateTime(dt.year, dt.month, dt.day))
-          .toSet();
-      int streak = 0;
-      var day = DateTime.now();
-      day = DateTime(day.year, day.month, day.day);
-      while (dates.contains(day)) {
-        streak++;
-        day = day.subtract(const Duration(days: 1));
-      }
-      return streak;
-    });
+          final dates = snap.docs
+              .map((d) {
+                final raw = d.data()['date'];
+                if (raw is Timestamp) return raw.toDate();
+                if (raw is String) return DateTime.tryParse(raw);
+                return null;
+              })
+              .whereType<DateTime>()
+              .map((dt) => DateTime(dt.year, dt.month, dt.day))
+              .toSet();
+          int streak = 0;
+          var day = DateTime.now();
+          day = DateTime(day.year, day.month, day.day);
+          while (dates.contains(day)) {
+            streak++;
+            day = day.subtract(const Duration(days: 1));
+          }
+          return streak;
+        });
   }
 
   // ── Violation trend: last 7 days ─────────────────────────────────────────────
@@ -142,29 +145,32 @@ class _StudentHomeScreenState extends State<StudentHomeScreen> {
         .where('studentUID', isEqualTo: uid)
         .snapshots()
         .map((snap) {
-      final blocks = DateHelpers.getDayBlocksForStreak(7).reversed.toList();
-      final counts = List<int>.filled(blocks.length, 0);
-      for (final doc in snap.docs) {
-        final data = doc.data();
-        final raw = data['timestamp'] ??
-            data['createdAt'] ??
-            data['detectedAt'] ??
-            data['date'];
-        DateTime? dt;
-        if (raw is Timestamp) dt = raw.toDate();
-        if (raw is String) dt = DateTime.tryParse(raw);
-        if (dt == null) continue;
+          final blocks = DateHelpers.getDayBlocksForStreak(7).reversed.toList();
+          final counts = List<int>.filled(blocks.length, 0);
+          for (final doc in snap.docs) {
+            final data = doc.data();
+            final raw =
+                data['timestamp'] ??
+                data['createdAt'] ??
+                data['detectedAt'] ??
+                data['date'];
+            DateTime? dt;
+            if (raw is Timestamp) dt = raw.toDate();
+            if (raw is String) dt = DateTime.tryParse(raw);
+            if (dt == null) continue;
 
-        for (var i = 0; i < blocks.length; i++) {
-          if (blocks[i].contains(dt)) {
-            counts[i] = counts[i] + 1;
-            break;
+            for (var i = 0; i < blocks.length; i++) {
+              if (blocks[i].contains(dt)) {
+                counts[i] = counts[i] + 1;
+                break;
+              }
+            }
           }
-        }
-      }
-      return List.generate(blocks.length,
-          (i) => FlSpot(i.toDouble(), counts[i].toDouble()));
-    });
+          return List.generate(
+            blocks.length,
+            (i) => FlSpot(i.toDouble(), counts[i].toDouble()),
+          );
+        });
   }
 
   void _openTasksScreen() {
@@ -210,6 +216,27 @@ class _StudentHomeScreenState extends State<StudentHomeScreen> {
         if (snap != null) break;
       }
 
+      // Fallback: if class mapping is inconsistent, discover a class doc that has today's periods.
+      if (snap == null || snap.docs.isEmpty) {
+        final allClasses = await FirebaseFirestore.instance
+            .collection('timetables')
+            .get();
+        for (final classDoc in allClasses.docs) {
+          for (final day in dayCandidates) {
+            final candidate = await FirebaseFirestore.instance
+                .collection('timetables')
+                .doc(classDoc.id)
+                .collection(day)
+                .get();
+            if (candidate.docs.isNotEmpty) {
+              snap = candidate;
+              break;
+            }
+          }
+          if (snap != null && snap.docs.isNotEmpty) break;
+        }
+      }
+
       snap ??= await FirebaseFirestore.instance
           .collection('timetables')
           .doc(classes.first)
@@ -218,7 +245,21 @@ class _StudentHomeScreenState extends State<StudentHomeScreen> {
 
       int parseTime(dynamic val) {
         if (val == null) return 0;
+        if (val is num) return val.toInt();
         final s = val.toString().trim();
+
+        final amPm = RegExp(
+          r'^(\d{1,2}):(\d{2})\s*([aApP][mM])$',
+        ).firstMatch(s);
+        if (amPm != null) {
+          var hour = int.tryParse(amPm.group(1)!) ?? 0;
+          final minute = int.tryParse(amPm.group(2)!) ?? 0;
+          final marker = amPm.group(3)!.toLowerCase();
+          if (marker == 'pm' && hour < 12) hour += 12;
+          if (marker == 'am' && hour == 12) hour = 0;
+          return hour * 60 + minute;
+        }
+
         if (s.contains(':')) {
           final p = s.split(':');
           if (p.length != 2) return 0;
@@ -236,11 +277,13 @@ class _StudentHomeScreenState extends State<StudentHomeScreen> {
           subject: data['subject'] ?? data['name'] ?? doc.id,
           startMinutes: parseTime(data['startTime'] ?? data['start']),
           endMinutes: parseTime(data['endTime'] ?? data['end']),
-          isBreak: (data['type'] ?? '').toString().toLowerCase().contains('break') ||
-              (data['subject'] ?? '').toString().toLowerCase().contains('break'),
+          isBreak:
+              (data['type'] ?? '').toString().toLowerCase().contains('break') ||
+              (data['subject'] ?? '').toString().toLowerCase().contains(
+                'break',
+              ),
         );
-      }).toList()
-        ..sort((a, b) => a.startMinutes.compareTo(b.startMinutes));
+      }).toList()..sort((a, b) => a.startMinutes.compareTo(b.startMinutes));
 
       if (mounted) {
         setState(() {
@@ -256,25 +299,50 @@ class _StudentHomeScreenState extends State<StudentHomeScreen> {
   List<_PeriodInfo> _periodsForCurrentWindow() {
     if (_todayPeriods.isEmpty) return const <_PeriodInfo>[];
 
-    final currentMinutes = DateTime.now().hour * 60 + DateTime.now().minute;
-    var lunchCutoff = 13 * 60;
+    final now = DateTime.now();
+    final currentMinutes = now.hour * 60 + now.minute;
 
-    final lunchBreaks = _todayPeriods
-        .where((p) =>
-            p.isBreak && p.subject.toLowerCase().contains('lunch'))
-        .toList()
-      ..sort((a, b) => a.startMinutes.compareTo(b.startMinutes));
+    // Determine lunch window from actual break periods
+    var lunchStartMinutes = 12 * 60; // default 12:00
+    var lunchEndMinutes = 13 * 60; // default 13:00
+
+    final lunchBreaks =
+        _todayPeriods
+            .where(
+              (p) => p.isBreak && p.subject.toLowerCase().contains('lunch'),
+            )
+            .toList()
+          ..sort((a, b) => a.startMinutes.compareTo(b.startMinutes));
 
     if (lunchBreaks.isNotEmpty) {
-      final lunch = lunchBreaks.first;
-      lunchCutoff = lunch.endMinutes > 0 ? lunch.endMinutes : lunch.startMinutes;
+      lunchStartMinutes = lunchBreaks.first.startMinutes;
+      lunchEndMinutes = lunchBreaks.first.endMinutes > 0
+          ? lunchBreaks.first.endMinutes
+          : lunchStartMinutes + 60;
     }
 
-    if (currentMinutes < lunchCutoff) {
-      return _todayPeriods.where((p) => p.startMinutes < lunchCutoff).toList();
-    }
+    final eveningCutoff = 17 * 60; // 5:00 PM
 
-    return _todayPeriods.where((p) => p.startMinutes >= lunchCutoff).toList();
+    if (currentMinutes < lunchEndMinutes) {
+      // Morning window: periods before lunch
+      return _todayPeriods
+          .where((p) => p.startMinutes < lunchStartMinutes)
+          .toList();
+    } else if (currentMinutes < eveningCutoff) {
+      // Afternoon window: periods after lunch and before 5pm
+      return _todayPeriods
+          .where(
+            (p) =>
+                p.startMinutes >= lunchEndMinutes &&
+                p.startMinutes < eveningCutoff,
+          )
+          .toList();
+    } else {
+      // Evening window: periods at or after 5pm
+      return _todayPeriods
+          .where((p) => p.startMinutes >= eveningCutoff)
+          .toList();
+    }
   }
 
   @override
@@ -286,38 +354,43 @@ class _StudentHomeScreenState extends State<StudentHomeScreen> {
     _taskStatsStream = _tasksService.streamTaskStats(
       studentUID: uid,
       classCandidates: _classCandidates,
+      studentLookupKeys: _studentLookupKeys,
     );
 
     _tasksListStream = uid.isEmpty
-      ? Stream.value(const <TaskWithSubmission>[])
-      : _tasksService.streamStudentAssignedTasks(
-        studentUID: uid,
-        classCandidates: _classCandidates,
-        ).map((items) => items.take(5).toList());
+        ? Stream.value(const <TaskWithSubmission>[])
+        : _tasksService
+              .streamStudentAssignedTasks(
+                studentUID: uid,
+                classCandidates: _classCandidates,
+                studentLookupKeys: _studentLookupKeys,
+              )
+              .map((items) => items.take(5).toList());
 
     _violationsStream = uid.isEmpty
         ? Stream.value(0)
         : FirebaseFirestore.instance
-            .collection('violations')
-            .where('studentUID', isEqualTo: uid)
-            .snapshots()
-            .map((snap) {
-              var count = 0;
-              for (final doc in snap.docs) {
-                final data = doc.data();
-                final raw = data['timestamp'] ??
-                    data['createdAt'] ??
-                    data['detectedAt'] ??
-                    data['date'];
-                DateTime? dt;
-                if (raw is Timestamp) dt = raw.toDate();
-                if (raw is String) dt = DateTime.tryParse(raw);
-                if (dt != null && DateHelpers.isInCurrentPeriod(dt)) {
-                  count++;
+              .collection('violations')
+              .where('studentUID', isEqualTo: uid)
+              .snapshots()
+              .map((snap) {
+                var count = 0;
+                for (final doc in snap.docs) {
+                  final data = doc.data();
+                  final raw =
+                      data['timestamp'] ??
+                      data['createdAt'] ??
+                      data['detectedAt'] ??
+                      data['date'];
+                  DateTime? dt;
+                  if (raw is Timestamp) dt = raw.toDate();
+                  if (raw is String) dt = DateTime.tryParse(raw);
+                  if (dt != null && DateHelpers.isInCurrentPeriod(dt)) {
+                    count++;
+                  }
                 }
-              }
-              return count;
-            });
+                return count;
+              });
 
     _streakStream = _buildStreakStream(uid);
     _violationTrendStream = _buildTrendStream(uid);
@@ -337,8 +410,8 @@ class _StudentHomeScreenState extends State<StudentHomeScreen> {
     final greeting = hour < 12
         ? 'Good Morning'
         : hour < 18
-            ? 'Good Afternoon'
-            : 'Good Evening';
+        ? 'Good Afternoon'
+        : 'Good Evening';
 
     return SafeArea(
       child: SingleChildScrollView(
@@ -353,17 +426,29 @@ class _StudentHomeScreenState extends State<StudentHomeScreen> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(greeting,
-                          style: GoogleFonts.poppins(
-                              fontSize: 13, color: AppColors.textSecondary)),
-                      Text(_name,
-                          style: GoogleFonts.poppins(
-                              fontSize: 20,
-                              fontWeight: FontWeight.w700,
-                              color: Colors.white)),
-                      Text('ID: $_studentId',
-                          style: GoogleFonts.poppins(
-                              fontSize: 12, color: AppColors.textSecondary)),
+                      Text(
+                        greeting,
+                        style: GoogleFonts.poppins(
+                          fontSize: 13,
+                          color: AppColors.textSecondary,
+                        ),
+                      ),
+                      Text(
+                        _name.toUpperCase(),
+                        style: GoogleFonts.poppins(
+                          fontSize: 26,
+                          fontWeight: FontWeight.w800,
+                          height: 1.1,
+                          color: Colors.white,
+                        ),
+                      ),
+                      Text(
+                        'ID: $_studentId',
+                        style: GoogleFonts.poppins(
+                          fontSize: 12,
+                          color: AppColors.textSecondary,
+                        ),
+                      ),
                     ],
                   ),
                 ),
@@ -375,12 +460,16 @@ class _StudentHomeScreenState extends State<StudentHomeScreen> {
                     gradient: AppGradients.blueGradient,
                     boxShadow: [
                       BoxShadow(
-                          color: AppColors.lightBlue.withValues(alpha: 0.4),
-                          blurRadius: 12)
+                        color: AppColors.lightBlue.withValues(alpha: 0.4),
+                        blurRadius: 12,
+                      ),
                     ],
                   ),
-                  child: const Icon(Icons.person_rounded,
-                      color: Colors.white, size: 24),
+                  child: const Icon(
+                    Icons.person_rounded,
+                    color: Colors.white,
+                    size: 24,
+                  ),
                 ),
               ],
             ).animate().fadeIn(),
@@ -405,16 +494,20 @@ class _StudentHomeScreenState extends State<StudentHomeScreen> {
                           children: [
                             _StatCard(
                               label: 'Tasks',
-                              value: '$done/$total',
+                              value:
+                                  taskSnap.connectionState ==
+                                      ConnectionState.waiting
+                                  ? '...'
+                                  : '$done/$total',
                               icon: Icons.check_circle_rounded,
                               color: AppColors.success,
                             ),
                             const SizedBox(width: 12),
                             _StatCard(
                               label: 'Streak',
-                              value: '${streak}days',
+                              value: '$streak days',
                               icon: Icons.local_fire_department_rounded,
-                              color: Colors.orange,
+                              color: const Color(0xFF00D4FF),
                             ),
                             const SizedBox(width: 12),
                             _StatCard(
@@ -437,70 +530,101 @@ class _StudentHomeScreenState extends State<StudentHomeScreen> {
             const SizedBox(height: 20),
 
             // ── My Tasks & Goals ──────────────────────────────────────────────
-            GestureDetector(
-              onTap: _openTasksScreen,
-              child: GlassCard(
-                child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Row(children: [
-                        const Icon(Icons.track_changes_rounded,
-                            color: AppColors.lightBlue, size: 18),
-                        const SizedBox(width: 8),
-                        Text('My Tasks & Goals',
-                            style: GoogleFonts.poppins(
-                                fontSize: 14,
-                                fontWeight: FontWeight.w600,
-                                color: Colors.white)),
-                      ]),
-                      const Icon(Icons.arrow_forward_ios_rounded,
-                          color: AppColors.textSecondary, size: 14),
-                    ],
-                  ),
-                  const SizedBox(height: 12),
-                  StreamBuilder<List<TaskWithSubmission>>(
-                    stream: _tasksListStream,
-                    builder: (context, snap) {
-                      if (snap.connectionState == ConnectionState.waiting) {
-                        return const Center(
-                          child: Padding(
-                            padding: EdgeInsets.all(12),
-                            child: CircularProgressIndicator(strokeWidth: 2),
+            StreamBuilder<List<TaskWithSubmission>>(
+              stream: _tasksListStream,
+              builder: (context, snap) {
+                final items = snap.data ?? [];
+                final pending = items
+                    .where((t) => t.status.name != 'accepted')
+                    .length;
+                final hasPending =
+                    snap.connectionState != ConnectionState.waiting &&
+                    pending > 0;
+
+                final gradient = hasPending
+                    ? const LinearGradient(
+                        begin: Alignment.topLeft,
+                        end: Alignment.bottomRight,
+                        colors: [Color(0xFFD32F2F), Color(0xFFFF6B6B)],
+                      )
+                    : AppGradients.blueGradient;
+
+                final shadowColor = hasPending
+                    ? const Color(0xFFFF0000)
+                    : const Color(0xFF2E5BFF);
+
+                final icon = hasPending
+                    ? Icons.assignment_late_rounded
+                    : Icons.check_circle_outline_rounded;
+
+                final subtitleText =
+                    snap.connectionState == ConnectionState.waiting
+                    ? 'Loading...'
+                    : hasPending
+                    ? '$pending task${pending > 1 ? 's' : ''} pending!'
+                    : 'All tasks completed!';
+
+                return GestureDetector(
+                  onTap: _openTasksScreen,
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 400),
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(20),
+                    decoration: BoxDecoration(
+                      gradient: gradient,
+                      borderRadius: BorderRadius.circular(24),
+                      boxShadow: [
+                        BoxShadow(
+                          color: shadowColor.withValues(alpha: 0.4),
+                          blurRadius: 20,
+                          offset: const Offset(0, 10),
+                        ),
+                      ],
+                    ),
+                    child: Row(
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.all(12),
+                          decoration: BoxDecoration(
+                            color: Colors.white.withValues(alpha: 0.2),
+                            shape: BoxShape.circle,
                           ),
-                        );
-                      }
-                      final items = snap.data ?? const <TaskWithSubmission>[];
-                      if (items.isEmpty) {
-                        return Padding(
-                          padding: const EdgeInsets.symmetric(vertical: 8),
-                          child: Text('No tasks assigned yet.',
-                              style: GoogleFonts.poppins(
-                                  fontSize: 12,
-                                  color: AppColors.textSecondary)),
-                        );
-                      }
-                      return Column(
-                        children: items.map((item) {
-                          final title = item.task.title.trim().isEmpty
-                              ? 'Task'
-                              : item.task.title.trim();
-                          final statusName = item.status.name;
-                          final status = statusName == 'accepted'
-                              ? 'completed'
-                              : statusName == 'rejected'
-                                  ? 'overdue'
-                                  : 'pending';
-                          return _TaskRow(title: title, status: status);
-                        }).toList(),
-                      );
-                    },
+                          child: Icon(icon, color: Colors.white, size: 32),
+                        ),
+                        const SizedBox(width: 16),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                'My Tasks & Goals',
+                                style: GoogleFonts.poppins(
+                                  fontSize: 18,
+                                  fontWeight: FontWeight.w600,
+                                  color: Colors.white,
+                                ),
+                              ),
+                              Text(
+                                subtitleText,
+                                style: GoogleFonts.poppins(
+                                  fontSize: 14,
+                                  color: Colors.white.withValues(alpha: 0.85),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        const Icon(
+                          Icons.arrow_forward_ios_rounded,
+                          color: Colors.white,
+                          size: 20,
+                        ),
+                      ],
+                    ),
                   ),
-                ],
-              ),
-            )).animate().fadeIn(delay: 200.ms).slideY(begin: 0.08, end: 0),
+                ).animate().fadeIn(delay: 200.ms).slideY(begin: 0.08, end: 0);
+              },
+            ),
 
             const SizedBox(height: 20),
 
@@ -512,16 +636,22 @@ class _StudentHomeScreenState extends State<StudentHomeScreen> {
                   Row(
                     children: [
                       Expanded(
-                        child: Text('Violation Trend (Last 7 Days)',
-                            style: GoogleFonts.poppins(
-                                fontSize: 14,
-                                fontWeight: FontWeight.w600,
-                                color: Colors.white)),
-                      ),
-                      Text('11 PM Reset',
+                        child: Text(
+                          'Violation Trend (Last 7 Days)',
                           style: GoogleFonts.poppins(
-                              fontSize: 10,
-                              color: AppColors.textSecondary)),
+                            fontSize: 14,
+                            fontWeight: FontWeight.w600,
+                            color: Colors.white,
+                          ),
+                        ),
+                      ),
+                      Text(
+                        '11 PM Reset',
+                        style: GoogleFonts.poppins(
+                          fontSize: 10,
+                          color: AppColors.textSecondary,
+                        ),
+                      ),
                     ],
                   ),
                   const SizedBox(height: 8),
@@ -530,8 +660,7 @@ class _StudentHomeScreenState extends State<StudentHomeScreen> {
                     builder: (context, snap) {
                       final spots = (snap.data != null && snap.data!.isNotEmpty)
                           ? snap.data!
-                          : List.generate(
-                              7, (i) => FlSpot(i.toDouble(), 0));
+                          : List.generate(7, (i) => FlSpot(i.toDouble(), 0));
                       final maxY = spots
                           .map((s) => s.y)
                           .fold<double>(4, (a, b) => a > b ? a : b);
@@ -557,15 +686,30 @@ class _StudentHomeScreenState extends State<StudentHomeScreen> {
                               ),
                             ),
                             titlesData: FlTitlesData(
-                              leftTitles: const AxisTitles(
-                                  sideTitles:
-                                      SideTitles(showTitles: false)),
+                              leftTitles: AxisTitles(
+                                sideTitles: SideTitles(
+                                  showTitles: true,
+                                  reservedSize: 28,
+                                  getTitlesWidget: (v, _) {
+                                    if (v == 50) {
+                                      return Text(
+                                        '50',
+                                        style: GoogleFonts.poppins(
+                                          fontSize: 10,
+                                          color: AppColors.textSecondary,
+                                        ),
+                                      );
+                                    }
+                                    return const SizedBox.shrink();
+                                  },
+                                ),
+                              ),
                               rightTitles: const AxisTitles(
-                                  sideTitles:
-                                      SideTitles(showTitles: false)),
+                                sideTitles: SideTitles(showTitles: false),
+                              ),
                               topTitles: const AxisTitles(
-                                  sideTitles:
-                                      SideTitles(showTitles: false)),
+                                sideTitles: SideTitles(showTitles: false),
+                              ),
                               bottomTitles: AxisTitles(
                                 sideTitles: SideTitles(
                                   showTitles: true,
@@ -577,11 +721,14 @@ class _StudentHomeScreenState extends State<StudentHomeScreen> {
                                     }
                                     return Padding(
                                       padding: const EdgeInsets.only(top: 6),
-                                      child: Text(labels[i],
-                                          style: GoogleFonts.poppins(
-                                              fontSize: 9,
-                                              color:
-                                                  AppColors.textSecondary)),
+                                      child: Text(
+                                        labels[i],
+                                        style: GoogleFonts.poppins(
+                                          fontSize: 10,
+                                          fontWeight: FontWeight.w500,
+                                          color: AppColors.textSecondary,
+                                        ),
+                                      ),
                                     );
                                   },
                                 ),
@@ -598,13 +745,13 @@ class _StudentHomeScreenState extends State<StudentHomeScreen> {
                                   show: true,
                                   getDotPainter: (spot, _, _, _) =>
                                       FlDotCirclePainter(
-                                    radius: 6,
-                                    color: spot.y <= 1
-                                        ? AppColors.success
-                                        : const Color(0xFFFFB020),
-                                    strokeWidth: 2,
-                                    strokeColor: Colors.white,
-                                  ),
+                                        radius: 6,
+                                        color: Colors.white,
+                                        strokeWidth: 3,
+                                        strokeColor: spot.y <= 1
+                                            ? AppColors.success
+                                            : const Color(0xFFFFB020),
+                                      ),
                                 ),
                                 belowBarData: BarAreaData(
                                   show: true,
@@ -612,10 +759,12 @@ class _StudentHomeScreenState extends State<StudentHomeScreen> {
                                     begin: Alignment.topCenter,
                                     end: Alignment.bottomCenter,
                                     colors: [
-                                      const Color(0xFFFFB020)
-                                          .withValues(alpha: 0.28),
-                                      const Color(0xFFFFB020)
-                                          .withValues(alpha: 0),
+                                      const Color(
+                                        0xFFFFB020,
+                                      ).withValues(alpha: 0.28),
+                                      const Color(
+                                        0xFFFFB020,
+                                      ).withValues(alpha: 0),
                                     ],
                                   ),
                                 ),
@@ -633,27 +782,37 @@ class _StudentHomeScreenState extends State<StudentHomeScreen> {
             const SizedBox(height: 20),
 
             // ── Today's Schedule ──────────────────────────────────────────────
-            Text("Today's Schedule",
-                style: GoogleFonts.poppins(
-                    fontSize: 16,
-                    fontWeight: FontWeight.w600,
-                    color: Colors.white)).animate().fadeIn(delay: 380.ms),
+            Text(
+              "Today's Schedule",
+              style: GoogleFonts.poppins(
+                fontSize: 16,
+                fontWeight: FontWeight.w600,
+                color: Colors.white,
+              ),
+            ).animate().fadeIn(delay: 380.ms),
             const SizedBox(height: 12),
 
             if (_periodsLoading)
-              const Center(
-                  child: CircularProgressIndicator(strokeWidth: 2))
+              const Center(child: CircularProgressIndicator(strokeWidth: 2))
             else if (_todayPeriods.isEmpty)
               GlassCard(
-                child: Text('No schedule found for today.',
-                    style: GoogleFonts.poppins(
-                        fontSize: 13, color: AppColors.textSecondary)),
+                child: Text(
+                  'No schedule found for today.',
+                  style: GoogleFonts.poppins(
+                    fontSize: 13,
+                    color: AppColors.textSecondary,
+                  ),
+                ),
               )
             else if (visiblePeriods.isEmpty)
               GlassCard(
-                child: Text('No periods found for this time of day.',
-                    style: GoogleFonts.poppins(
-                        fontSize: 13, color: AppColors.textSecondary)),
+                child: Text(
+                  'No periods found for this time of day.',
+                  style: GoogleFonts.poppins(
+                    fontSize: 13,
+                    color: AppColors.textSecondary,
+                  ),
+                ),
               )
             else
               ..._buildGroupedSchedule(visiblePeriods),
@@ -664,35 +823,55 @@ class _StudentHomeScreenState extends State<StudentHomeScreen> {
   }
 
   List<Widget> _buildGroupedSchedule(List<_PeriodInfo> periods) {
-    final morning = <_PeriodInfo>[];
-    final afterLunch = <_PeriodInfo>[];
-    final evening = <_PeriodInfo>[];
+    // Determine current window label
+    final now = DateTime.now();
+    final currentMinutes = now.hour * 60 + now.minute;
 
-    for (final period in periods) {
-      final hour = period.startMinutes ~/ 60;
-      if (hour < 12) {
-        morning.add(period);
-      } else if (hour < 17) {
-        afterLunch.add(period);
-      } else {
-        evening.add(period);
-      }
+    // Figure out lunch boundaries from timetable
+    var lunchStartMinutes = 12 * 60;
+    var lunchEndMinutes = 13 * 60;
+    final lunchBreaks =
+        _todayPeriods
+            .where(
+              (p) => p.isBreak && p.subject.toLowerCase().contains('lunch'),
+            )
+            .toList()
+          ..sort((a, b) => a.startMinutes.compareTo(b.startMinutes));
+    if (lunchBreaks.isNotEmpty) {
+      lunchStartMinutes = lunchBreaks.first.startMinutes;
+      lunchEndMinutes = lunchBreaks.first.endMinutes > 0
+          ? lunchBreaks.first.endMinutes
+          : lunchStartMinutes + 60;
+    }
+    const eveningCutoff = 17 * 60;
+
+    String sectionLabel;
+    if (currentMinutes < lunchEndMinutes) {
+      sectionLabel = 'Before Lunch';
+    } else if (currentMinutes < eveningCutoff) {
+      sectionLabel = 'After Lunch';
+    } else {
+      sectionLabel = 'Evening';
     }
 
     final out = <Widget>[];
     var index = 0;
-    void addSection(String title, List<_PeriodInfo> items) {
-      if (items.isEmpty) return;
-      out.add(Padding(
-        padding: const EdgeInsets.only(bottom: 8),
-        child: Text(title,
+
+    if (periods.isNotEmpty) {
+      out.add(
+        Padding(
+          padding: const EdgeInsets.only(bottom: 12),
+          child: Text(
+            sectionLabel,
             style: GoogleFonts.poppins(
-                fontSize: 14,
-                fontWeight: FontWeight.w500,
-                color: AppColors.textSecondary)),
-      ));
-      for (final period in items) {
-        final now = DateTime.now();
+              fontSize: 14,
+              fontWeight: FontWeight.w500,
+              color: AppColors.textSecondary,
+            ),
+          ),
+        ),
+      );
+      for (final period in periods) {
         final cur = now.hour * 60 + now.minute;
         final isNow = cur >= period.startMinutes && cur < period.endMinutes;
         final isPast = cur >= period.endMinutes;
@@ -701,7 +880,8 @@ class _StudentHomeScreenState extends State<StudentHomeScreen> {
             padding: const EdgeInsets.only(bottom: 10),
             child: _PeriodTile(
               subject: period.subject,
-              timeRange: '${_fmt(period.startMinutes)} – ${_fmt(period.endMinutes)}',
+              timeRange:
+                  '${_fmt(period.startMinutes)} – ${_fmt(period.endMinutes)}',
               isBreak: period.isBreak,
               isNow: isNow,
               isPast: isPast,
@@ -710,16 +890,8 @@ class _StudentHomeScreenState extends State<StudentHomeScreen> {
         );
         index++;
       }
-      out.add(const SizedBox(height: 6));
     }
 
-    addSection('Morning', morning);
-    addSection('After Lunch', afterLunch);
-    addSection('Evening', evening);
-
-    if (out.isNotEmpty && out.last is SizedBox) {
-      out.removeLast();
-    }
     return out;
   }
 }
@@ -741,27 +913,34 @@ class _StatCard extends StatelessWidget {
   Widget build(BuildContext context) {
     return Expanded(
       child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 14),
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 16),
         decoration: BoxDecoration(
           color: Colors.white.withValues(alpha: 0.07),
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: color.withValues(alpha: 0.3), width: 1),
+          borderRadius: BorderRadius.circular(18),
+          border: Border.all(color: color.withValues(alpha: 0.25), width: 1.2),
         ),
         child: Column(
           children: [
-            Icon(icon, color: color, size: 20),
-            const SizedBox(height: 5),
-            Text(value,
-                style: GoogleFonts.poppins(
-                    fontSize: 16,
-                    fontWeight: FontWeight.w700,
-                    color: Colors.white),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis),
-            Text(label,
-                style: GoogleFonts.poppins(
-                    fontSize: 10, color: AppColors.textSecondary),
-                textAlign: TextAlign.center),
+            Icon(icon, color: color, size: 24),
+            const SizedBox(height: 8),
+            Text(
+              value,
+              style: GoogleFonts.poppins(
+                fontSize: 20,
+                fontWeight: FontWeight.w700,
+                color: Colors.white,
+              ),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+            Text(
+              label,
+              style: GoogleFonts.poppins(
+                fontSize: 12,
+                color: AppColors.textSecondary,
+              ),
+              textAlign: TextAlign.center,
+            ),
           ],
         ),
       ),
@@ -769,60 +948,6 @@ class _StatCard extends StatelessWidget {
   }
 }
 
-// ── Task Row ─────────────────────────────────────────────────────────────────
-class _TaskRow extends StatelessWidget {
-  final String title;
-  final String status;
-  const _TaskRow({required this.title, required this.status});
-
-  @override
-  Widget build(BuildContext context) {
-    Color badgeColor;
-    String badge;
-    switch (status.toLowerCase()) {
-      case 'completed':
-      case 'done':
-        badgeColor = AppColors.success;
-        badge = 'Done';
-        break;
-      case 'overdue':
-        badgeColor = AppColors.danger;
-        badge = 'Overdue';
-        break;
-      default:
-        badgeColor = Colors.orange;
-        badge = 'Pending';
-    }
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 8),
-      child: Row(
-        children: [
-          Expanded(
-            child: Text(title,
-                style: GoogleFonts.poppins(fontSize: 13, color: Colors.white),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis),
-          ),
-          Container(
-            padding:
-                const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
-            decoration: BoxDecoration(
-              color: badgeColor.withValues(alpha: 0.2),
-              borderRadius: BorderRadius.circular(20),
-              border:
-                  Border.all(color: badgeColor.withValues(alpha: 0.5)),
-            ),
-            child: Text(badge,
-                style: GoogleFonts.poppins(
-                    fontSize: 10,
-                    color: badgeColor,
-                    fontWeight: FontWeight.w600)),
-          ),
-        ],
-      ),
-    );
-  }
-}
 
 // ── Period Tile ───────────────────────────────────────────────────────────────
 class _PeriodTile extends StatelessWidget {
@@ -842,55 +967,72 @@ class _PeriodTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final Color accent = isNow
-        ? AppColors.success
-        : isBreak
-            ? Colors.orange
-            : AppColors.lightBlue;
+    // Match the screenshot's yellow accent style, but keep success for active items
+    final Color accent = isNow ? AppColors.success : const Color(0xFFFFB020);
 
     return Opacity(
-      opacity: isPast && !isNow ? 0.5 : 1.0,
+      opacity: isPast && !isNow ? 0.6 : 1.0,
       child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
         decoration: BoxDecoration(
-          color: isNow
-              ? AppColors.success.withValues(alpha: 0.12)
-              : Colors.white.withValues(alpha: 0.07),
-          borderRadius: BorderRadius.circular(14),
+          color: Colors.white.withValues(alpha: 0.05),
+          borderRadius: BorderRadius.circular(20),
           border: Border.all(
-              color: accent.withValues(alpha: isNow ? 0.6 : 0.25),
-              width: isNow ? 1.5 : 1),
+            color: Colors.white.withValues(alpha: 0.08),
+            width: 1,
+          ),
         ),
         child: Row(
           children: [
             Container(
-              width: 4,
-              height: 40,
+              width: 5,
+              height: 44,
               decoration: BoxDecoration(
-                  color: accent,
-                  borderRadius: BorderRadius.circular(2)),
-              margin: const EdgeInsets.only(right: 12),
+                color: accent,
+                borderRadius: BorderRadius.circular(3),
+                boxShadow: [
+                  BoxShadow(
+                    color: accent.withValues(alpha: 0.3),
+                    blurRadius: 8,
+                  ),
+                ],
+              ),
+              margin: const EdgeInsets.only(right: 16),
             ),
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(subject,
-                      style: GoogleFonts.poppins(
-                          fontSize: 14,
-                          fontWeight: FontWeight.w600,
-                          color: Colors.white)),
-                  Text(timeRange,
-                      style: GoogleFonts.poppins(
-                          fontSize: 12, color: AppColors.textSecondary)),
+                  Text(
+                    subject,
+                    style: GoogleFonts.poppins(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w600,
+                      color: Colors.white,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    timeRange,
+                    style: GoogleFonts.poppins(
+                      fontSize: 13,
+                      color: AppColors.textSecondary.withValues(alpha: 0.8),
+                    ),
+                  ),
                 ],
               ),
             ),
             if (isNow)
               _badge('Now', AppColors.success)
             else
-              _badge(isBreak ? 'Break' : 'Class Time',
-                  isBreak ? Colors.orange : AppColors.lightBlue),
+              Text(
+                'N/A',
+                style: GoogleFonts.poppins(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                  color: AppColors.textSecondary.withValues(alpha: 0.4),
+                ),
+              ),
           ],
         ),
       ),
@@ -898,20 +1040,19 @@ class _PeriodTile extends StatelessWidget {
   }
 
   Widget _badge(String text, Color color) => Container(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
-        decoration: BoxDecoration(
-          color: color.withValues(alpha: 0.15),
-          borderRadius: BorderRadius.circular(20),
-          border: Border.all(color: color.withValues(alpha: 0.5)),
-        ),
-        child: Text(text,
-            style: GoogleFonts.poppins(
-                fontSize: 10,
-                color: color,
-                fontWeight: FontWeight.w600)),
-      );
+    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
+    decoration: BoxDecoration(
+      color: color.withValues(alpha: 0.15),
+      borderRadius: BorderRadius.circular(20),
+      border: Border.all(color: color.withValues(alpha: 0.5)),
+    ),
+    child: Text(
+      text,
+      style: GoogleFonts.poppins(
+        fontSize: 10,
+        color: color,
+        fontWeight: FontWeight.w600,
+      ),
+    ),
+  );
 }
-
-
-
-

@@ -32,8 +32,6 @@ class PendingSubmissionItem {
 
 /// Service for admin-assigned task workflow
 class TasksService {
-  static const Duration _completedRetention = Duration(days: 7);
-
   final FirebaseFirestore _firestore;
   final fs.FirebaseStorage _storage;
 
@@ -44,11 +42,29 @@ class TasksService {
   CollectionReference<Map<String, dynamic>> get _tasksCollection =>
       _firestore.collection('tasks');
 
+  int _statusPriority(TaskSubmissionStatus status) {
+    switch (status) {
+      case TaskSubmissionStatus.pending:
+      case TaskSubmissionStatus.notSubmitted:
+        return 0;
+      case TaskSubmissionStatus.rejected:
+        return 1;
+      case TaskSubmissionStatus.accepted:
+        return 2;
+    }
+  }
+
+  DateTime _startOfCurrentWeek() {
+    final now = DateTime.now();
+    final midnight = DateTime(now.year, now.month, now.day);
+    return midnight.subtract(Duration(days: now.weekday - 1));
+  }
+
   bool _isExpiredCompletedSubmission(TaskSubmission? submission) {
     if (submission == null) return false;
     if (submission.status != TaskSubmissionStatus.accepted) return false;
     final anchor = submission.reviewedAt ?? submission.submittedAt;
-    return DateTime.now().isAfter(anchor.add(_completedRetention));
+    return anchor.isBefore(_startOfCurrentWeek());
   }
 
   Future<void> _cleanupExpiredAcceptedSubmission({
@@ -203,7 +219,7 @@ class TasksService {
         }
       }
 
-      final allTasks = allDocs.values
+        final allTasks = allDocs.values
           .map((doc) => Task.fromFirestore(doc))
           .where((task) => task.isActive)
           .where((task) {
@@ -221,34 +237,47 @@ class TasksService {
 
             return _classMatches(task.targetClassId, classes);
           })
-          .toList()
-        ..sort((a, b) => a.dueDate.compareTo(b.dueDate));
+          .toList();
 
       final out = <TaskWithSubmission>[];
       for (final task in allTasks) {
         final taskId = task.id;
         if (taskId == null || taskId.isEmpty) continue;
         TaskSubmission? submission;
-        if (effectiveStudentUID.isNotEmpty) {
+        String? submissionDocId;
+        final submissionLookupIds = <String>{
+          if (effectiveStudentUID.isNotEmpty) effectiveStudentUID,
+          ...lookupKeys,
+        }.toList();
+
+        for (final lookupId in submissionLookupIds) {
+          if (lookupId.trim().isEmpty) continue;
           try {
             final subSnap = await _tasksCollection
                 .doc(taskId)
                 .collection('submissions')
-                .doc(effectiveStudentUID)
+                .doc(lookupId)
                 .get();
-            if (subSnap.exists) {
-              submission = TaskSubmission.fromMap(subSnap.data()!);
+            if (!subSnap.exists) continue;
+            final candidate = TaskSubmission.fromMap(subSnap.data()!);
+            final candidateAnchor = candidate.reviewedAt ?? candidate.submittedAt;
+            final existingAnchor =
+                (submission?.reviewedAt ?? submission?.submittedAt) ?? DateTime.fromMillisecondsSinceEpoch(0);
+            if (submission == null || candidateAnchor.isAfter(existingAnchor)) {
+              submission = candidate;
+              submissionDocId = lookupId;
             }
           } catch (_) {
-            submission = null;
+            continue;
           }
         }
 
         if (_isExpiredCompletedSubmission(submission)) {
-          if (effectiveStudentUID.isNotEmpty) {
+          final deleteId = submissionDocId ?? effectiveStudentUID;
+          if (deleteId.isNotEmpty) {
             await _cleanupExpiredAcceptedSubmission(
               taskId: taskId,
-              studentUID: effectiveStudentUID,
+              studentUID: deleteId,
             );
           }
           continue;
@@ -361,17 +390,28 @@ class TasksService {
       return Stream.value(const <PendingSubmissionItem>[]);
     }
 
-    return _tasksCollection
+    final taskOwnerChanges = _tasksCollection
         .where('createdByUID', isEqualTo: reviewer)
         .snapshots()
-        .asyncMap((tasksSnapshot) async {
+        .map((_) {});
+    final periodicRefresh = Stream<void>.periodic(const Duration(seconds: 4), (_) {});
+
+    return StreamGroup.merge([taskOwnerChanges, periodicRefresh]).asyncMap((_) async {
+      final tasksSnapshot = await _tasksCollection
+          .where('createdByUID', isEqualTo: reviewer)
+          .get();
       final out = <PendingSubmissionItem>[];
       for (final taskDoc in tasksSnapshot.docs) {
         final task = Task.fromFirestore(taskDoc);
-        final pendingSubmissions = await taskDoc.reference
-            .collection('submissions')
-            .where('reviewStatus', isEqualTo: 'pending')
-            .get();
+        QuerySnapshot<Map<String, dynamic>> pendingSubmissions;
+        try {
+          pendingSubmissions = await taskDoc.reference
+              .collection('submissions')
+              .where('reviewStatus', isEqualTo: 'pending')
+              .get();
+        } catch (_) {
+          continue;
+        }
 
         for (final submissionDoc in pendingSubmissions.docs) {
           final submission = TaskSubmission.fromMap(submissionDoc.data());
@@ -383,7 +423,13 @@ class TasksService {
         }
       }
 
-      out.sort((a, b) => b.submission.submittedAt.compareTo(a.submission.submittedAt));
+      out.sort((a, b) {
+        final byStatus = _statusPriority(a.submission.status).compareTo(
+          _statusPriority(b.submission.status),
+        );
+        if (byStatus != 0) return byStatus;
+        return a.task.dueDate.compareTo(b.task.dueDate);
+      });
       return out;
     });
   }

@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'package:async/async.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import '../utils/date_helpers.dart';
 
 class AdminStudentRow {
   final String uid;
@@ -22,12 +21,31 @@ class AdminAlertRow {
   final String regNo;
   final String period;
   final DateTime timestamp;
+  final int secondsUsed;
 
   const AdminAlertRow({
     required this.name,
     required this.regNo,
     required this.period,
     required this.timestamp,
+    this.secondsUsed = 0,
+  });
+}
+
+class AdminTopViolator {
+  final String name;
+  final int count;
+  const AdminTopViolator({required this.name, required this.count});
+}
+
+class AdminDailyViolation {
+  final DateTime date;
+  final int count;          // total violations that day
+  final String topName;     // first name of top violator ('' if none)
+  const AdminDailyViolation({
+    required this.date,
+    required this.count,
+    required this.topName,
   });
 }
 
@@ -37,22 +55,18 @@ class AdminDashboardService {
   AdminDashboardService({FirebaseFirestore? firestore})
       : _db = firestore ?? FirebaseFirestore.instance;
 
-  DateTime get _periodStart => DateHelpers.getCurrentPeriodStart();
-  DateTime get _periodEnd => DateHelpers.getCurrentPeriodEnd();
+  String _todayDateKey() {
+    final now = DateTime.now();
+    final y = now.year.toString().padLeft(4, '0');
+    final m = now.month.toString().padLeft(2, '0');
+    final d = now.day.toString().padLeft(2, '0');
+    return '${y}_${m}_$d';
+  }
 
   Query<Map<String, dynamic>> _todayAttendanceQuery() {
-    return _db
-        .collection('attendance')
-        .where('loginTime', isGreaterThanOrEqualTo: Timestamp.fromDate(_periodStart))
-        .where('loginTime', isLessThan: Timestamp.fromDate(_periodEnd));
+    return _db.collection('attendance').where('date', isEqualTo: _todayDateKey());
   }
 
-  Query<Map<String, dynamic>> _todayViolationsQuery() {
-    return _db
-        .collection('violations')
-        .where('timestamp', isGreaterThanOrEqualTo: Timestamp.fromDate(_periodStart))
-        .where('timestamp', isLessThan: Timestamp.fromDate(_periodEnd));
-  }
 
   String _displayName(Map<String, dynamic> data) {
     return (data['name'] ?? data['studentName'] ?? 'Unknown').toString().trim();
@@ -98,36 +112,42 @@ class AdminDashboardService {
     });
   }
 
-  Stream<List<Map<String, dynamic>>> _streamTodayAttendanceDocs() {
-    return _todayAttendanceQuery().snapshots().map(
-          (snap) => snap.docs.map((doc) => {'id': doc.id, ...doc.data()}).toList(),
-        );
-  }
-
   Stream<List<AdminStudentRow>> streamPresentTodayList() {
-    return _streamTodayAttendanceDocs().map((rows) {
-      final present = rows
-          .where((row) => row['logoutTime'] == null)
-          .map((row) {
-            final uid = (row['studentUID'] ?? '').toString().trim();
-            return AdminStudentRow(
-              uid: uid,
-              name: _displayName(row),
-              regNo: _displayRegNo(row),
-              classLabel: (row['className'] ?? row['class'] ?? '-').toString(),
-            );
-          })
-          .where((row) => row.uid.isNotEmpty)
-          .toList();
+    final attendanceTrigger = _todayAttendanceQuery().snapshots().map((_) {});
+    final studentTrigger = _db.collection('students').snapshots().map((_) {});
 
-      final unique = <String, AdminStudentRow>{};
-      for (final row in present) {
-        unique[row.uid] = row;
+    return StreamGroup.merge([attendanceTrigger, studentTrigger]).asyncMap((_) async {
+      final attendanceSnap = await _todayAttendanceQuery().get();
+      final studentsSnap = await _db.collection('students').get();
+
+      // Build student profile lookup by UID
+      final studentByUid = <String, Map<String, dynamic>>{};
+      for (final doc in studentsSnap.docs) {
+        final data = doc.data();
+        final uid = (data['uid'] ?? doc.id).toString().trim();
+        if (uid.isNotEmpty) studentByUid[uid] = {'id': doc.id, ...data};
       }
 
-      final out = unique.values.toList()
+      final unique = <String, AdminStudentRow>{};
+      for (final doc in attendanceSnap.docs) {
+        final row = doc.data();
+        // Only include students who are currently inside (no logoutTime yet)
+        if (row['logoutTime'] != null) continue;
+        final uid = (row['studentUID'] ?? '').toString().trim();
+        if (uid.isEmpty) continue;
+
+        // Merge attendance + student profile to get full details
+        final profile = studentByUid[uid] ?? row;
+        unique[uid] = AdminStudentRow(
+          uid: uid,
+          name: _displayName(profile),
+          regNo: _displayRegNo(profile),
+          classLabel: _displayClass(profile),
+        );
+      }
+
+      return unique.values.toList()
         ..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
-      return out;
     });
   }
 
@@ -141,6 +161,8 @@ class AdminDashboardService {
 
       final loggedUids = <String>{};
       for (final doc in attendanceSnap.docs) {
+        // Only treat as "currently present" if they haven't logged out yet
+        if (doc.data()['logoutTime'] != null) continue;
         final uid = (doc.data()['studentUID'] ?? '').toString().trim();
         if (uid.isNotEmpty) loggedUids.add(uid);
       }
@@ -167,20 +189,149 @@ class AdminDashboardService {
   }
 
   Stream<List<AdminAlertRow>> streamTodayAlertsList() {
-    return _todayViolationsQuery().snapshots().map((snap) {
-      final out = snap.docs.map((doc) {
+    // Full calendar-day window (midnight → now)
+    final now = DateTime.now();
+    final todayStart = DateTime(now.year, now.month, now.day);
+    return _db
+        .collection('violations')
+        .where('timestamp',
+            isGreaterThanOrEqualTo: Timestamp.fromDate(todayStart))
+        .orderBy('timestamp', descending: true)
+        .snapshots()
+        .map((snap) => snap.docs.map((doc) {
+              final data = doc.data();
+              final ts = data['timestamp'];
+              final time = ts is Timestamp ? ts.toDate() : DateTime.now();
+              return AdminAlertRow(
+                name: _displayName(data),
+                regNo: _displayRegNo(data),
+                period: (data['period'] ?? 'Unknown').toString(),
+                timestamp: time,
+              );
+            }).toList());
+  }
+
+  /// Last 3 unique students with alerts today (home screen Recent Alerts).
+  Stream<List<AdminAlertRow>> streamRecentUniqueAlerts() {
+    final now = DateTime.now();
+    final todayStart = DateTime(now.year, now.month, now.day);
+    return _db
+        .collection('violations')
+        .where('timestamp',
+            isGreaterThanOrEqualTo: Timestamp.fromDate(todayStart))
+        .orderBy('timestamp', descending: true)
+        .snapshots()
+        .map((snap) {
+      final seen = <String>{};
+      final out = <AdminAlertRow>[];
+      for (final doc in snap.docs) {
         final data = doc.data();
+        final nameKey = _displayName(data).trim().toLowerCase();
+        if (seen.contains(nameKey)) continue;
+        seen.add(nameKey);
         final ts = data['timestamp'];
         final time = ts is Timestamp ? ts.toDate() : DateTime.now();
-        return AdminAlertRow(
+        out.add(AdminAlertRow(
           name: _displayName(data),
           regNo: _displayRegNo(data),
           period: (data['period'] ?? 'Unknown').toString(),
           timestamp: time,
-        );
-      }).toList()
-        ..sort((a, b) => b.timestamp.compareTo(a.timestamp));
+        ));
+        if (out.length == 3) break;
+      }
       return out;
+    });
+  }
+
+  /// Violations screen — last 48 hours rolling window.
+  Stream<List<AdminAlertRow>> streamLast2DaysAlertsList() {
+    final cutoff = DateTime.now().subtract(const Duration(hours: 48));
+    return _db
+        .collection('violations')
+        .where('timestamp',
+            isGreaterThanOrEqualTo: Timestamp.fromDate(cutoff))
+        .orderBy('timestamp', descending: true)
+        .snapshots()
+        .map((snap) => snap.docs.map((doc) {
+              final data = doc.data();
+              final ts = data['timestamp'];
+              final time = ts is Timestamp ? ts.toDate() : DateTime.now();
+              return AdminAlertRow(
+                name: _displayName(data),
+                regNo: _displayRegNo(data),
+                period: (data['period'] ?? 'Unknown').toString(),
+                timestamp: time,
+                secondsUsed: (data['secondsUsed'] as num?)?.toInt() ?? 0,
+              );
+            }).toList());
+  }
+
+  /// Top students by phone-usage violation count today (for home bar chart).
+  Stream<List<AdminTopViolator>> streamTopViolators({int limit = 5}) {
+    final now = DateTime.now();
+    final todayStart = DateTime(now.year, now.month, now.day);
+    return _db
+        .collection('violations')
+        .where('timestamp',
+            isGreaterThanOrEqualTo: Timestamp.fromDate(todayStart))
+        .snapshots()
+        .map((snap) {
+      final counts = <String, int>{};
+      for (final doc in snap.docs) {
+        final name = _displayName(doc.data()).trim();
+        if (name.isNotEmpty) counts[name] = (counts[name] ?? 0) + 1;
+      }
+      final sorted = counts.entries.toList()
+        ..sort((a, b) => b.value.compareTo(a.value));
+      return sorted
+          .take(limit)
+          .map((e) => AdminTopViolator(name: e.key, count: e.value))
+          .toList();
+    });
+  }
+
+  /// Last 7 days: per-day total violations + top violator name.
+  Stream<List<AdminDailyViolation>> streamWeeklyViolationChart() {
+    final now = DateTime.now();
+    final weekStart = DateTime(now.year, now.month, now.day)
+        .subtract(const Duration(days: 6));
+    return _db
+        .collection('violations')
+        .where('timestamp',
+            isGreaterThanOrEqualTo: Timestamp.fromDate(weekStart))
+        .snapshots()
+        .map((snap) {
+      // dayKey -> studentName -> count
+      final dayMap = <String, Map<String, int>>{};
+      for (final doc in snap.docs) {
+        final data = doc.data();
+        final ts = data['timestamp'];
+        if (ts is! Timestamp) continue;
+        final dt = ts.toDate().toLocal();
+        final key =
+            '${dt.year}-${dt.month.toString().padLeft(2, '0')}-${dt.day.toString().padLeft(2, '0')}';
+        final name = _displayName(data).trim();
+        dayMap[key] ??= {};
+        dayMap[key]![name] = (dayMap[key]![name] ?? 0) + 1;
+      }
+
+      return List.generate(7, (i) {
+        final day = DateTime(now.year, now.month, now.day)
+            .subtract(Duration(days: 6 - i));
+        final key =
+            '${day.year}-${day.month.toString().padLeft(2, '0')}-${day.day.toString().padLeft(2, '0')}';
+        final studentCounts = dayMap[key] ?? {};
+        final total = studentCounts.values.fold(0, (a, b) => a + b);
+        final topName = studentCounts.isEmpty
+            ? ''
+            : (studentCounts.entries.toList()
+                  ..sort((a, b) => b.value.compareTo(a.value)))
+                .first
+                .key
+                .split(' ')
+                .first;
+        return AdminDailyViolation(date: day, count: total, topName: topName);
+      });
     });
   }
 

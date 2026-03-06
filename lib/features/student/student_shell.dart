@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_gradients.dart';
@@ -105,6 +106,11 @@ class _StudentShellState extends State<StudentShell> {
   }
 
   String _resolveStudentUid() {
+    final authUid = FirebaseAuth.instance.currentUser?.uid;
+    if (authUid != null && authUid.trim().isNotEmpty) {
+      return authUid.trim();
+    }
+
     return (widget.studentData['uid'] ??
             widget.studentData['id'] ??
             widget.studentData['studentId'] ??
@@ -137,6 +143,7 @@ class _StudentShellState extends State<StudentShell> {
 
   List<String> _buildStudentLookupKeys() {
     final raw = <dynamic>[
+      FirebaseAuth.instance.currentUser?.uid,
       widget.studentData['uid'],
       widget.studentData['id'],
       widget.studentData['studentId'],

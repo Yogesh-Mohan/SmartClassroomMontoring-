@@ -49,13 +49,13 @@ class _TasksScreenState extends State<TasksScreen> {
   }
 
   String get _effectiveStudentUid {
-    final providedUid = widget.studentUID.trim();
-    if (providedUid.isNotEmpty) {
-      return providedUid;
-    }
     final authUid = FirebaseAuth.instance.currentUser?.uid;
     if (authUid != null && authUid.trim().isNotEmpty) {
       return authUid.trim();
+    }
+    final providedUid = widget.studentUID.trim();
+    if (providedUid.isNotEmpty) {
+      return providedUid;
     }
     return '';
   }

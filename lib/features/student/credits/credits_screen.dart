@@ -14,16 +14,23 @@ class CreditsScreen extends StatelessWidget {
   final Map<String, dynamic> studentData;
   const CreditsScreen({super.key, required this.studentData});
 
-  String get _studentId {
-    final uid = FirebaseAuth.instance.currentUser?.uid;
-    if (uid != null && uid.isNotEmpty) return uid;
-
-    return (studentData['uid'] ??
-            studentData['id'] ??
-            studentData['studentId'] ??
+  String get _studentAcademicId {
+    return (studentData['studentId'] ??
             studentData['registrationNumber'] ??
+            studentData['regNo'] ??
+            studentData['rollNo'] ??
+            studentData['id'] ??
+            studentData['uid'] ??
+            FirebaseAuth.instance.currentUser?.uid ??
             '')
-        .toString();
+        .toString()
+        .trim();
+  }
+
+  String get _studentUid {
+    return (FirebaseAuth.instance.currentUser?.uid ?? studentData['uid'] ?? '')
+        .toString()
+        .trim();
   }
 
   String get _studentName => (studentData['name'] ?? 'Student').toString();
@@ -39,7 +46,8 @@ class CreditsScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final stream = CreditsService.instance.streamStudentDashboard(
-      studentId: _studentId,
+      studentId: _studentAcademicId,
+      studentUid: _studentUid,
       semester: _semester,
     );
 
@@ -55,7 +63,7 @@ class CreditsScreen extends StatelessWidget {
           Navigator.of(context).push(
             MaterialPageRoute(
               builder: (_) => UploadCertificateScreen(
-                studentId: _studentId,
+                studentId: _studentAcademicId,
                 studentName: _studentName,
                 semester: _semester,
               ),

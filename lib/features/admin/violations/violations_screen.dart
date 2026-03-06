@@ -1,4 +1,4 @@
-import 'package:cloud_firestore/cloud_firestore.dart';
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -8,6 +8,7 @@ import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/widgets/glass_card.dart';
+import '../../../services/admin_dashboard_service.dart';
 
 class AdminViolationsScreen extends StatefulWidget {
   const AdminViolationsScreen({super.key});
@@ -17,51 +18,41 @@ class AdminViolationsScreen extends StatefulWidget {
 }
 
 class _AdminViolationsScreenState extends State<AdminViolationsScreen> {
-  List<_ViolationItem> _items = [];
+  late final AdminDashboardService _service;
+  late final Stream<List<AdminAlertRow>> _stream;
+
+  List<AdminAlertRow> _items = [];
   bool _loading = true;
   bool _exportingPdf = false;
-  String? _error;
+
+  StreamSubscription<List<AdminAlertRow>>? _sub;
 
   @override
   void initState() {
     super.initState();
-    _fetch();
+    _service = AdminDashboardService();
+    _stream = _service.streamLast2DaysAlertsList();
+    _sub = _stream.listen((items) {
+      if (mounted) setState(() { _items = items; _loading = false; });
+    }, onError: (_) {
+      if (mounted) setState(() { _loading = false; });
+    });
   }
 
-  Future<void> _fetch() async {
-    setState(() { _loading = true; _error = null; });
-    try {
-      final snap = await FirebaseFirestore.instance
-          .collection('violations')
-          .orderBy('timestamp', descending: true)
-          .get();
-
-      final list = snap.docs.map((doc) {
-        final d = doc.data();
-        return _ViolationItem(
-          name        : (d['name']        ?? '—').toString(),
-          regNo       : (d['regNo']       ?? '—').toString(),
-          period      : (d['period']      ?? '—').toString(),
-          secondsUsed : (d['secondsUsed'] as num?)?.toInt() ?? 0,
-          timestamp   : d['timestamp'] as Timestamp?,
-        );
-      }).toList();
-
-      setState(() { _items = list; _loading = false; });
-    } catch (e) {
-      setState(() { _error = e.toString(); _loading = false; });
-    }
+  @override
+  void dispose() {
+    _sub?.cancel();
+    super.dispose();
   }
 
-  String _formatTime(Timestamp? ts) {
-    if (ts == null) return '—';
-    final dt = ts.toDate().toLocal();
-    final h  = dt.hour > 12 ? dt.hour - 12 : (dt.hour == 0 ? 12 : dt.hour);
-    final m  = dt.minute.toString().padLeft(2, '0');
-    final ap = dt.hour >= 12 ? 'PM' : 'AM';
-    final day   = dt.day.toString().padLeft(2, '0');
-    final month = dt.month.toString().padLeft(2, '0');
-    return '$h:$m $ap  •  $day/$month/${dt.year}';
+  String _formatTime(DateTime dt) {
+    final local = dt.toLocal();
+    final h  = local.hour > 12 ? local.hour - 12 : (local.hour == 0 ? 12 : local.hour);
+    final m  = local.minute.toString().padLeft(2, '0');
+    final ap = local.hour >= 12 ? 'PM' : 'AM';
+    final day   = local.day.toString().padLeft(2, '0');
+    final month = local.month.toString().padLeft(2, '0');
+    return '$h:$m $ap  •  $day/$month/${local.year}';
   }
 
   Future<void> _downloadPdf() async {
@@ -84,7 +75,7 @@ class _AdminViolationsScreenState extends State<AdminViolationsScreen> {
           build: (pw.Context context) {
             return [
               pw.Text(
-                'Violations Report',
+                'Violations Report (Last 48 hours)',
                 style: pw.TextStyle(
                   fontSize: 20,
                   fontWeight: pw.FontWeight.bold,
@@ -101,9 +92,7 @@ class _AdminViolationsScreenState extends State<AdminViolationsScreen> {
                           item.regNo,
                           item.period,
                           '${item.secondsUsed}s',
-                          item.timestamp == null
-                              ? '—'
-                              : dateFormat.format(item.timestamp!.toDate().toLocal()),
+                          dateFormat.format(item.timestamp.toLocal()),
                         ])
                     .toList(),
               ),
@@ -150,7 +139,7 @@ class _AdminViolationsScreenState extends State<AdminViolationsScreen> {
                               fontWeight: FontWeight.w700,
                               color: Colors.white))
                           .animate().fadeIn(),
-                      Text('Phone usage during class time',
+                      Text('Last 48 hours • Phone usage during class',
                           style: GoogleFonts.poppins(
                               fontSize: 12, color: AppColors.textSecondary))
                           .animate().fadeIn(delay: 100.ms),
@@ -158,7 +147,7 @@ class _AdminViolationsScreenState extends State<AdminViolationsScreen> {
                   ),
                 ),
                 // Count badge
-                if (!_loading && _error == null)
+                if (!_loading)
                   Container(
                     padding: const EdgeInsets.symmetric(
                         horizontal: 12, vertical: 6),
@@ -195,13 +184,6 @@ class _AdminViolationsScreenState extends State<AdminViolationsScreen> {
                           size: 22,
                         ),
                 ),
-                const SizedBox(width: 2),
-                // Refresh button
-                IconButton(
-                  onPressed: _fetch,
-                  icon: const Icon(Icons.refresh_rounded,
-                      color: Colors.white70, size: 22),
-                ),
               ],
             ),
           ),
@@ -213,11 +195,9 @@ class _AdminViolationsScreenState extends State<AdminViolationsScreen> {
             child: _loading
                 ? const Center(
                     child: CircularProgressIndicator(color: AppColors.danger))
-                : _error != null
-                    ? _buildError()
-                    : _items.isEmpty
-                        ? _buildEmpty()
-                        : _buildList(),
+                : _items.isEmpty
+                    ? _buildEmpty()
+                    : _buildList(),
           ),
         ],
       ),
@@ -314,7 +294,7 @@ class _AdminViolationsScreenState extends State<AdminViolationsScreen> {
           Icon(Icons.check_circle_outline_rounded,
               size: 64, color: AppColors.success.withValues(alpha: 0.6)),
           const SizedBox(height: 16),
-          Text('No violations found.',
+          Text('No violations in the last 48 hours.',
               style: GoogleFonts.poppins(
                   fontSize: 16,
                   fontWeight: FontWeight.w600,
@@ -327,51 +307,6 @@ class _AdminViolationsScreenState extends State<AdminViolationsScreen> {
       ).animate().fadeIn(),
     );
   }
-
-  Widget _buildError() {
-    return Center(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(Icons.error_outline_rounded,
-              size: 56, color: AppColors.danger.withValues(alpha: 0.7)),
-          const SizedBox(height: 12),
-          Text('Failed to load violations',
-              style: GoogleFonts.poppins(
-                  fontSize: 15, color: Colors.white70)),
-          const SizedBox(height: 16),
-          ElevatedButton.icon(
-            style: ElevatedButton.styleFrom(
-              backgroundColor: AppColors.danger.withValues(alpha: 0.2),
-              foregroundColor: AppColors.danger,
-              shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12)),
-            ),
-            onPressed: _fetch,
-            icon: const Icon(Icons.refresh_rounded, size: 18),
-            label: Text('Retry', style: GoogleFonts.poppins()),
-          ),
-        ],
-      ).animate().fadeIn(),
-    );
-  }
-}
-
-// ── Data model ────────────────────────────────────────────────────────────────
-class _ViolationItem {
-  final String    name;
-  final String    regNo;
-  final String    period;
-  final int       secondsUsed;
-  final Timestamp? timestamp;
-
-  const _ViolationItem({
-    required this.name,
-    required this.regNo,
-    required this.period,
-    required this.secondsUsed,
-    required this.timestamp,
-  });
 }
 
 // ── Info row widget ───────────────────────────────────────────────────────────

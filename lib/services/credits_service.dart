@@ -16,39 +16,101 @@ class CreditsService {
 
   Stream<CreditsDashboardState> streamStudentDashboard({
     required String studentId,
+    String? studentUid,
     required String semester,
   }) {
-    final certStream = _db
-        .collection('certificates')
-        .where('studentId', isEqualTo: studentId)
-        .snapshots();
-    final interactionStream = _db
-        .collection('interactionScores')
-        .where('studentId', isEqualTo: studentId)
-        .where('semester', isEqualTo: semester)
-        .snapshots();
-    final marksStream = _db
-        .collection('internalMarks')
-        .where('studentId', isEqualTo: studentId)
-        .where('semester', isEqualTo: semester)
-        .snapshots();
+    final normalizedStudentId = studentId.trim();
+    final normalizedStudentUid = (studentUid ?? '').trim();
+    final effectiveUid =
+        normalizedStudentUid.isNotEmpty ? normalizedStudentUid : normalizedStudentId;
 
-    return StreamZip<QuerySnapshot<Map<String, dynamic>>>([
-      certStream,
-      interactionStream,
-      marksStream,
-    ]).map((events) {
-      final certSnap = events[0];
-      final interactionSnap = events[1];
-      final marksSnap = events[2];
+    // Trigger on certificate changes (by studentUid) + periodic refresh.
+    // Using asyncMap with individual try-catch prevents a single failing
+    // Firestore query (e.g. security rule denial) from crashing the whole stream.
+    final triggers = StreamGroup.merge([
+      _db
+          .collection('certificates')
+          .where('studentUid', isEqualTo: effectiveUid)
+          .snapshots()
+          .map((_) {}),
+      Stream<void>.periodic(const Duration(seconds: 10), (_) {}),
+    ]);
 
+    return triggers.asyncMap((_) async {
+      // ── Certificates ─────────────────────────────────────────────────────
+      final certDocMap = <String, QueryDocumentSnapshot<Map<String, dynamic>>>{};
+      try {
+        final snap = await _db
+            .collection('certificates')
+            .where('studentUid', isEqualTo: effectiveUid)
+            .get();
+        for (final doc in snap.docs) { certDocMap[doc.id] = doc; }
+      } catch (_) {}
+      if (normalizedStudentId.isNotEmpty && normalizedStudentId != effectiveUid) {
+        try {
+          final snap = await _db
+              .collection('certificates')
+              .where('studentId', isEqualTo: normalizedStudentId)
+              .get();
+          for (final doc in snap.docs) { certDocMap.putIfAbsent(doc.id, () => doc); }
+        } catch (_) {}
+      }
+      final certDocs = certDocMap.values.toList();
+
+      // ── Interaction scores ────────────────────────────────────────────────
+      final interactionDocMap =
+          <String, QueryDocumentSnapshot<Map<String, dynamic>>>{};
+      try {
+        final snap = await _db
+            .collection('interactionScores')
+            .where('studentId', isEqualTo: normalizedStudentId)
+            .where('semester', isEqualTo: semester)
+            .get();
+        for (final doc in snap.docs) { interactionDocMap[doc.id] = doc; }
+      } catch (_) {}
+      if (normalizedStudentUid.isNotEmpty) {
+        try {
+          final snap = await _db
+              .collection('interactionScores')
+              .where('studentUid', isEqualTo: normalizedStudentUid)
+              .where('semester', isEqualTo: semester)
+              .get();
+          for (final doc in snap.docs) { interactionDocMap.putIfAbsent(doc.id, () => doc); }
+        } catch (_) {}
+      }
+      final interactionDocs = interactionDocMap.values.toList();
+
+      // ── Internal marks ────────────────────────────────────────────────────
+      final marksDocMap =
+          <String, QueryDocumentSnapshot<Map<String, dynamic>>>{};
+      try {
+        final snap = await _db
+            .collection('internalMarks')
+            .where('studentId', isEqualTo: normalizedStudentId)
+            .where('semester', isEqualTo: semester)
+            .get();
+        for (final doc in snap.docs) { marksDocMap[doc.id] = doc; }
+      } catch (_) {}
+      if (normalizedStudentUid.isNotEmpty) {
+        try {
+          final snap = await _db
+              .collection('internalMarks')
+              .where('studentUid', isEqualTo: normalizedStudentUid)
+              .where('semester', isEqualTo: semester)
+              .get();
+          for (final doc in snap.docs) { marksDocMap.putIfAbsent(doc.id, () => doc); }
+        } catch (_) {}
+      }
+      final marksDocs = marksDocMap.values.toList();
+
+      // ── Compute dashboard state ───────────────────────────────────────────
       final now = DateTime.now();
       final startOfMonth = DateTime(now.year, now.month, 1);
       final nextMonth = DateTime(now.year, now.month + 1, 1);
       double monthlyActivity = 0;
       double semesterActivity = 0;
 
-      for (final doc in certSnap.docs) {
+      for (final doc in certDocs) {
         if ((doc.data()['status'] ?? '') != 'Approved') continue;
         final score = _asDouble(doc.data()['advisorScore']);
         final approvedAt = _parseTimestamp(doc.data()['approvedAt']);
@@ -67,13 +129,13 @@ class CreditsService {
       final Map<String, double> totalsBySubject = {};
       final Map<String, String> subjectNameById = {};
 
-      for (final doc in interactionSnap.docs) {
+      for (final doc in interactionDocs) {
         final data = doc.data();
         final subjectId = (data['subjectId'] ?? 'subject').toString();
         final subjectName = (data['subjectName'] ?? 'Subject').toString();
         final entry = InteractionScoreEntry(
           id: doc.id,
-          topic: (data['topic'] ?? 'Topic').toString(),
+          topic: (data['topic'] ?? data['topicName'] ?? 'Topic').toString(),
           score: _asDouble(data['score']),
           createdBy: (data['createdBy'] ?? 'Teacher').toString(),
           createdAt: _parseTimestamp(data['createdAt']),
@@ -95,7 +157,7 @@ class CreditsService {
       }).toList()
         ..sort((a, b) => b.totalScore.compareTo(a.totalScore));
 
-      final internals = marksSnap.docs.map((doc) {
+      final internals = marksDocs.map((doc) {
         final data = doc.data();
         return InternalMarkEntry(
           subjectId: (data['subjectId'] ?? doc.id).toString(),
@@ -201,11 +263,9 @@ class CreditsService {
       start: monthWindow.start,
       end: monthWindow.end,
     );
-    if (monthlyScore + score > 10) {
-      throw CreditsException(
-        'Monthly activity cap exceeded. Available: ${(10 - monthlyScore).clamp(0, 10).toStringAsFixed(1)}',
-      );
-    }
+    final availableThisMonth = (10 - monthlyScore).clamp(0, 10).toDouble();
+    final awardedScore = min(score, availableThisMonth);
+    final isCapped = awardedScore < score;
 
     final semesterScore = await _sumApprovedCertificates(
       studentId: studentId,
@@ -214,19 +274,28 @@ class CreditsService {
 
     await certRef.update({
       'status': 'Approved',
-      'advisorScore': score,
+      'advisorScore': awardedScore,
+      'requestedAdvisorScore': score,
+      'scoreWasCapped': isCapped,
+      'monthlyAvailableAtReview': availableThisMonth,
       'approvedBy': advisorId,
       'approvedByName': advisorName,
       'approvedAt': FieldValue.serverTimestamp(),
     });
 
-    final newSemesterScore = semesterScore + score;
+    final newSemesterScore = semesterScore + awardedScore;
     final activityBoost = ((newSemesterScore).clamp(0, 10) / 10) * 2;
     final activityPercent = (activityBoost / 2) * 100;
 
-    await _db.collection('students').doc(studentId).set({
+    final studentUid = (data['studentUid'] ?? '').toString().trim();
+    final studentDocId = await _resolveStudentDocId(
+      studentId: studentId,
+      studentUid: studentUid,
+    );
+
+    await _db.collection('students').doc(studentDocId).set({
       'credits': {
-        'monthlyScore': double.parse((monthlyScore + score).toStringAsFixed(2)),
+        'monthlyScore': double.parse((monthlyScore + awardedScore).toStringAsFixed(2)),
         'semesterScore': double.parse(newSemesterScore.toStringAsFixed(2)),
         'activityBoostPoints': double.parse(activityBoost.toStringAsFixed(2)),
         'activityBoostPercent': double.parse(activityPercent.toStringAsFixed(1)),
@@ -234,7 +303,47 @@ class CreditsService {
       }
     }, SetOptions(merge: true));
 
-    await _updateAllInternalMarks(studentId: studentId, activityBoost: activityBoost);
+    await _updateAllInternalMarks(
+      studentId: studentId,
+      studentUid: studentUid,
+      activityBoost: activityBoost,
+    );
+  }
+
+  Future<String> _resolveStudentDocId({
+    required String studentId,
+    required String studentUid,
+  }) async {
+    final normalizedStudentId = studentId.trim();
+    final normalizedStudentUid = studentUid.trim();
+
+    if (normalizedStudentUid.isNotEmpty) {
+      final byUidDoc = await _db.collection('students').doc(normalizedStudentUid).get();
+      if (byUidDoc.exists) return byUidDoc.id;
+
+      final byUidField = await _db
+          .collection('students')
+          .where('uid', isEqualTo: normalizedStudentUid)
+          .limit(1)
+          .get();
+      if (byUidField.docs.isNotEmpty) return byUidField.docs.first.id;
+    }
+
+    final byStudentId = await _db
+        .collection('students')
+        .where('studentId', isEqualTo: normalizedStudentId)
+        .limit(1)
+        .get();
+    if (byStudentId.docs.isNotEmpty) return byStudentId.docs.first.id;
+
+    final byRegNo = await _db
+        .collection('students')
+        .where('regNo', isEqualTo: normalizedStudentId)
+        .limit(1)
+        .get();
+    if (byRegNo.docs.isNotEmpty) return byRegNo.docs.first.id;
+
+    return normalizedStudentUid.isNotEmpty ? normalizedStudentUid : normalizedStudentId;
   }
 
   Future<void> rejectCertificate({
@@ -266,6 +375,7 @@ class CreditsService {
     required String semester,
     required String topic,
     required double score,
+    String studentUid = '',
   }) async {
     if (score <= 0 || score > 10) {
       throw CreditsException('Interaction score must be between 0 and 10.');
@@ -286,10 +396,12 @@ class CreditsService {
 
     await _db.collection('interactionScores').add({
       'studentId': studentId,
+      'studentUid': studentUid.trim(),
       'subjectId': subjectId,
       'subjectName': subjectName,
       'semester': semester,
       'topicName': topic,
+      'topic': topic,
       'teacherId': teacherId,
       'score': score,
       'studentName': studentName,
@@ -314,6 +426,7 @@ class CreditsService {
 
     await markRef.set({
       'studentId': studentId,
+      if (studentUid.trim().isNotEmpty) 'studentUid': studentUid.trim(),
       'studentName': studentName,
       'subjectId': subjectId,
       'subjectName': subjectName,
@@ -403,6 +516,7 @@ class CreditsService {
   Future<void> _updateAllInternalMarks({
     required String studentId,
     required double activityBoost,
+    String studentUid = '',
   }) async {
     final marksSnap = await _db
         .collection('internalMarks')
@@ -419,11 +533,13 @@ class CreditsService {
         activityBoost: activityBoost,
         interactionBoost: interactionBoost,
       );
-      batch.set(doc.reference, {
+      final update = <String, dynamic>{
         'activityBoost': activityBoost,
         'finalInternal': finalInternal,
         'updatedAt': FieldValue.serverTimestamp(),
-      }, SetOptions(merge: true));
+      };
+      if (studentUid.trim().isNotEmpty) update['studentUid'] = studentUid.trim();
+      batch.set(doc.reference, update, SetOptions(merge: true));
     }
     await batch.commit();
   }
