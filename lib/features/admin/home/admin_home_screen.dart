@@ -296,7 +296,7 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
                                   barTouchData: BarTouchData(
                                     touchTooltipData: BarTouchTooltipData(
                                       getTooltipColor: (_) => Colors.black87,
-                                      getTooltipItem: (group, _, rod, __) {
+                                      getTooltipItem: (group, _, rod, _) {
                                         final d = days[group.x];
                                         final count = rod.toY.toInt();
                                         return BarTooltipItem(
