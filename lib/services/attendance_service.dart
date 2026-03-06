@@ -196,7 +196,9 @@ class AttendanceService {
           debugPrint('[Attendance] logout_attempts write failed (check rules deployed): $e');
         }
 
-        // Notify all admins about early logout attempt.
+        // Path 1: Firestore listener in admin_shell catches this immediately
+        //         when admin app is open/background.
+        // Path 2: Render backend wakes up and sends FCM push (handles app-killed).
         final displayPeriod = periodLabel == 'unknown' ? 'Outside Class Hours' : periodLabel;
         unawaited(_notifyAdmins(
           title: '⚠️ Early Logout Attempt',
@@ -208,7 +210,6 @@ class AttendanceService {
             'period':      displayPeriod,
           },
         ));
-
         debugPrint('[Attendance] Early logout blocked. Period: $periodLabel');
 
         return LogoutResult(
@@ -247,7 +248,7 @@ class AttendanceService {
     }
   }
 
-  // ── Internal: notify all admins via backend ────────────────────────────────
+  // ── Internal: notify all admins via Render backend (fire-and-forget) ───────
 
   Future<void> _notifyAdmins({
     required String title,
@@ -256,33 +257,16 @@ class AttendanceService {
   }) async {
     const backendUrl =
         'https://smartclassroommontoring-system.onrender.com/notify-admins';
-    const maxAttempts = 2;
     try {
-      for (var attempt = 1; attempt <= maxAttempts; attempt++) {
-        try {
-          final response = await http.post(
-            Uri.parse(backendUrl),
-            headers: {'Content-Type': 'application/json'},
-            body: json.encode({
-              'title': title,
-              'body': body,
-              'data': data,
-            }),
-          ).timeout(const Duration(seconds: 15));
-          if (response.statusCode == 200) {
-            debugPrint('[Attendance] notifyAdmins success via $backendUrl (attempt $attempt)');
-            return;
-          } else {
-            debugPrint('[Attendance] notifyAdmins HTTP ${response.statusCode} attempt $attempt via $backendUrl');
-          }
-        } catch (e) {
-          debugPrint('[Attendance] notifyAdmins attempt $attempt failed via $backendUrl: $e');
-        }
-      }
-
-      debugPrint('[Attendance] notifyAdmins failed after all attempts');
+      // 90-second timeout to handle Render free-tier cold start (~50s wake-up).
+      final response = await http.post(
+        Uri.parse(backendUrl),
+        headers: {'Content-Type': 'application/json'},
+        body: json.encode({'title': title, 'body': body, 'data': data}),
+      ).timeout(const Duration(seconds: 90));
+      debugPrint('[Attendance] notifyAdmins HTTP ${response.statusCode}');
     } catch (e) {
-      debugPrint('[Attendance] _notifyAdmins error: $e');
+      debugPrint('[Attendance] notifyAdmins failed: $e');
     }
   }
 

@@ -223,6 +223,42 @@ exports.notifyAdmins = functions.https.onRequest(async (req, res) => {
 });
 
 /**
+ * Cloud Function: Early logout attempt → notify all admins via FCM.
+ *
+ * Triggers whenever a student writes to logout_attempts collection.
+ * This replaces the Render backend call (no cold-start delays).
+ */
+exports.onEarlyLogoutAttempt = functions.firestore
+  .document('logout_attempts/{attemptId}')
+  .onCreate(async (snap) => {
+    try {
+      const data = snap.data();
+      const studentName = (data?.studentName || 'Student').toString().trim();
+      const regNo = (data?.regNo || '').toString().trim();
+      const period = (data?.period || 'Unknown').toString().trim();
+
+      const displayName = regNo ? `${studentName} (${regNo})` : studentName;
+
+      const result = await sendNotificationToAdmins({
+        title: '⚠️ Early Logout Attempt',
+        body: `${displayName} tried to logout during ${period}.`,
+        data: {
+          type: 'early_logout',
+          studentName,
+          regNo,
+          period,
+        },
+      });
+
+      console.log(`✅ Early logout notification sent to ${result.successCount}/${result.tokenCount} admins`);
+      return result;
+    } catch (error) {
+      console.error('❌ onEarlyLogoutAttempt error:', error);
+      return null;
+    }
+  });
+
+/**
  * Cloud Function: Violation post-processing only.
  *
  * Admin notification is intentionally sent from app -> backend /notify-admins

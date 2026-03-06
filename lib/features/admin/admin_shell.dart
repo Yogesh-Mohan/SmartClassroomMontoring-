@@ -26,6 +26,7 @@ class _AdminShellState extends State<AdminShell> {
 
   late final List<Widget> _pages;
   StreamSubscription<QuerySnapshot>? _violationsSubscription;
+  StreamSubscription<QuerySnapshot>? _logoutAttemptsSubscription;
   Timestamp? _shellStartedAt;
 
   @override
@@ -41,6 +42,7 @@ class _AdminShellState extends State<AdminShell> {
     _bootstrapAdminPush();
     _setupFcmTokenRefreshListener();
     _startViolationsListener();
+    _startLogoutAttemptsListener();
   }
 
   Future<void> _bootstrapAdminPush() async {
@@ -108,6 +110,37 @@ class _AdminShellState extends State<AdminShell> {
     });
   }
 
+  /// Listen for NEW early-logout attempts and show local notification.
+  void _startLogoutAttemptsListener() {
+    final since = _shellStartedAt ?? Timestamp.fromDate(DateTime.now());
+    _logoutAttemptsSubscription = FirebaseFirestore.instance
+        .collection('logout_attempts')
+        .where('attemptTime', isGreaterThan: since)
+        .orderBy('attemptTime', descending: true)
+        .limit(1)
+        .snapshots()
+        .listen((snapshot) {
+      for (final change in snapshot.docChanges) {
+        if (change.type == DocumentChangeType.added) {
+          final d = change.doc.data();
+          if (d == null) continue;
+          final name   = (d['studentName'] ?? 'Student').toString();
+          final regNo  = (d['regNo']       ?? '').toString();
+          final period = (d['period']      ?? 'Unknown').toString();
+          final label  = regNo.isNotEmpty ? '$name ($regNo)' : name;
+          debugPrint('[AdminShell] 🔔 Early logout attempt: $label - $period');
+          NotificationService().showPushNotification(
+            title: '⚠️ Early Logout Attempt',
+            body:  '$label tried to logout during $period.',
+            data:  {'type': 'early_logout'},
+          );
+        }
+      }
+    }, onError: (e) {
+      debugPrint('[AdminShell] Logout attempts listener error: $e');
+    });
+  }
+
   /// Save FCM token to Firestore admins/{uid} document.
   Future<void> _saveFcmTokenToFirestore(String token) async {
     try {
@@ -129,6 +162,7 @@ class _AdminShellState extends State<AdminShell> {
   @override
   void dispose() {
     _violationsSubscription?.cancel();
+    _logoutAttemptsSubscription?.cancel();
     super.dispose();
   }
 
