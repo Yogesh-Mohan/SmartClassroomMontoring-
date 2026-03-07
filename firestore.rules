@@ -208,6 +208,17 @@ service cloud.firestore {
       allow write: if isAdmin() || isAdvisor();
     }
 
+    // ── LIVE MONITORING ───────────────────────────────────────────────────────
+    // Students write their own real-time monitoring data (docId = their UID).
+    // Admins can read all live monitoring data for the dashboard.
+    match /live_monitoring/{docId} {
+      allow read: if request.auth != null
+                  && (request.auth.uid == docId || isAdmin());
+      allow create, update: if request.auth != null
+                            && request.auth.uid == docId;
+      allow delete: if false;
+    }
+
     // ── BLOCK EVERYTHING ELSE ────────────────────────────────────────────────
     match /{document=**} {
       allow read, write: if false;

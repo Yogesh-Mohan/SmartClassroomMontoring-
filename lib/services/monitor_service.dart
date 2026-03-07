@@ -4,6 +4,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
+import 'live_monitoring_service.dart';
 import 'notification_service.dart';
 
 /// ScreenMonitorService — Flutter-side controller for the native MonitoringService.
@@ -16,26 +17,46 @@ class ScreenMonitorService {
     _channel.setMethodCallHandler(_handleNativeCall);
   }
 
-  static const _channel =
-      MethodChannel('com.smartclassroom.smart_classroom/monitoring');
+  static const _channel = MethodChannel(
+    'com.smartclassroom.smart_classroom/monitoring',
+  );
 
   bool _isMonitoring = false;
 
   // Student info stored when monitoring starts
-  String _studentId   = '';
+  String _studentId = '';
   String _studentName = '';
-  String _regNo       = '';
+  String _regNo = '';
 
-  /// Handle calls FROM native → Flutter (e.g. violation fired)
+  final LiveMonitoringService _liveMonitor = LiveMonitoringService();
+
+  /// Handle calls FROM native → Flutter (e.g. violation fired, live updates)
   Future<dynamic> _handleNativeCall(MethodCall call) async {
     if (call.method == 'onViolation') {
-      final args        = Map<String, dynamic>.from(call.arguments as Map);
+      final args = Map<String, dynamic>.from(call.arguments as Map);
       final secondsUsed = (args['secondsUsed'] as num?)?.toInt() ?? 20;
-      final period      = (args['period'] as String?) ?? 'Unknown';
-      await _saveViolationToFirestore(
-        secondsUsed: secondsUsed,
-        period: period,
-      );
+      final period = (args['period'] as String?) ?? 'Unknown';
+
+      // Prevent duplicate violations for the same usage session
+      if (_liveMonitor.violationSentThisSession) {
+        debugPrint('[Monitor] Duplicate violation suppressed for this session');
+        return;
+      }
+
+      await _saveViolationToFirestore(secondsUsed: secondsUsed, period: period);
+      _liveMonitor.markViolationSent();
+    } else if (call.method == 'onLiveUpdate') {
+      // Receive live monitoring data from native service
+      final args = Map<String, dynamic>.from(call.arguments as Map);
+      final currentApp = (args['currentApp'] as String?) ?? '';
+      final screenTime = (args['screenTime'] as num?)?.toInt() ?? 0;
+      final period = (args['period'] as String?) ?? '';
+      final status = (args['status'] as String?) ?? 'active';
+
+      _liveMonitor.updateCurrentApp(currentApp);
+      _liveMonitor.updateScreenTime(screenTime);
+      _liveMonitor.updateCurrentPeriod(period);
+      _liveMonitor.updateStatus(status);
     }
   }
 
@@ -47,24 +68,25 @@ class ScreenMonitorService {
   }) async {
     try {
       final authenticatedUid = FirebaseAuth.instance.currentUser?.uid;
-      final violationOwnerId = (authenticatedUid != null && authenticatedUid.isNotEmpty)
+      final violationOwnerId =
+          (authenticatedUid != null && authenticatedUid.isNotEmpty)
           ? authenticatedUid
           : _studentId;
 
       await FirebaseFirestore.instance.collection('violations').add({
-        'studentUID'  : violationOwnerId,
-        'name'        : _studentName,
-        'regNo'       : _regNo,
-        'secondsUsed' : secondsUsed,
-        'period'      : period,
-        'timestamp'   : FieldValue.serverTimestamp(),
+        'studentUID': violationOwnerId,
+        'name': _studentName,
+        'regNo': _regNo,
+        'secondsUsed': secondsUsed,
+        'period': period,
+        'type': 'phone_usage',
+        'timestamp': FieldValue.serverTimestamp(),
       });
-      debugPrint('[Monitor] ✅ Violation saved: student=$_studentName period=$period seconds=$secondsUsed');
-
-      await _notifyAdminsForViolation(
-        secondsUsed: secondsUsed,
-        period: period,
+      debugPrint(
+        '[Monitor] ✅ Violation saved: student=$_studentName period=$period seconds=$secondsUsed',
       );
+
+      await _notifyAdminsForViolation(secondsUsed: secondsUsed, period: period);
     } catch (e) {
       debugPrint('[Monitor] ❌ Failed to save violation: $e');
     }
@@ -89,7 +111,9 @@ class ScreenMonitorService {
       );
 
       if (sent) {
-        debugPrint('[Monitor] ✅ Admin notification request sent via Cloud Function');
+        debugPrint(
+          '[Monitor] ✅ Admin notification request sent via Cloud Function',
+        );
       }
     } catch (e) {
       debugPrint('[Monitor] ❌ Error while notifying admins: $e');
@@ -105,13 +129,9 @@ class ScreenMonitorService {
     debugPrint('[FCM] 📤 Requesting admin fan-out notification...');
 
     const backendUrl =
-      'https://smartclassroommontoring-system.onrender.com/notify-admins';
+        'https://smartclassroommontoring-system.onrender.com/notify-admins';
 
-    final payload = {
-      'title': title,
-      'body': body,
-      'data': data,
-    };
+    final payload = {'title': title, 'body': body, 'data': data};
 
     const maxAttempts = 2;
     for (var attempt = 1; attempt <= maxAttempts; attempt++) {
@@ -158,9 +178,9 @@ class ScreenMonitorService {
     }
 
     // Store student data for violation saves
-    _studentId   = studentId;
+    _studentId = studentId;
     _studentName = studentName;
-    _regNo       = regNo;
+    _regNo = regNo;
 
     // Request Android 13+ notification permission
     await NotificationService().initialize();
@@ -170,6 +190,17 @@ class ScreenMonitorService {
       final result = await _channel.invokeMethod<bool>('startMonitoring');
       _isMonitoring = result ?? false;
       debugPrint('[Monitor] Native service started: $_isMonitoring');
+
+      // Start the live monitoring Firestore sync
+      if (_isMonitoring) {
+        final uid = FirebaseAuth.instance.currentUser?.uid ?? studentId;
+        _liveMonitor.start(
+          studentUID: uid,
+          studentName: studentName,
+          regNo: regNo,
+        );
+      }
+
       return _isMonitoring;
     } on PlatformException catch (e) {
       debugPrint('[Monitor] Failed to start native service: ${e.message}');
@@ -183,6 +214,8 @@ class ScreenMonitorService {
     try {
       await _channel.invokeMethod<bool>('stopMonitoring');
       _isMonitoring = false;
+      // Stop live monitoring → sets status to 'offline' in Firestore
+      await _liveMonitor.stop();
       debugPrint('[Monitor] Native service stopped');
     } on PlatformException catch (e) {
       debugPrint('[Monitor] Failed to stop native service: ${e.message}');
@@ -235,7 +268,9 @@ class ScreenMonitorService {
         'active': active,
         'period': period,
       });
-      debugPrint('[Monitor] Timetable status pushed: monitoringActive=$active period=$period');
+      debugPrint(
+        '[Monitor] Timetable status pushed: monitoringActive=$active period=$period',
+      );
     } on PlatformException catch (e) {
       debugPrint('[Monitor] updateTimetableStatus failed: ${e.message}');
     }
@@ -251,4 +286,3 @@ class ScreenMonitorService {
 
   bool get isMonitoring => _isMonitoring;
 }
-

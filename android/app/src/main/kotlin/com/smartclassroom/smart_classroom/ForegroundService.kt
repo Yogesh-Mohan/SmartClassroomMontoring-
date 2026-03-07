@@ -187,6 +187,11 @@ class MonitoringService : Service() {
                 resetViolationState()
             }
 
+            // Push live update to Flutter every tick for real-time monitoring
+            // Only send the real screenTime when the timer is ACTIVELY running
+            val reportedScreenTime = if (timerRunning && isBlocked && timetableOn) elapsedSeconds else 0
+            sendLiveUpdateToFlutter(currentApp, reportedScreenTime, timetableOn)
+
             timerHandler.postDelayed(this, 1_000)
         }
     }
@@ -240,7 +245,7 @@ class MonitoringService : Service() {
     }
 
     private fun isBlockedApp(pkg: String): Boolean {
-        if (pkg.isEmpty()) return true
+        if (pkg.isEmpty()) return false  // unknown app = safe, do NOT count
         return pkg in BLOCKED_APPS
     }
 
@@ -328,6 +333,42 @@ class MonitoringService : Service() {
             }
         } else {
             android.util.Log.w("MonitoringService", "flutterChannel is null — violation NOT sent to Flutter")
+        }
+    }
+
+    /**
+     * Send live monitoring data to Flutter so it can be pushed to Firestore
+     * for the admin real-time dashboard.
+     *
+     * status:
+     *   "active"  → student is currently using an interactive app during class
+     *   "idle"    → screen off, no interactive app, or break time
+     *   "offline" → set by Flutter when the student logs out
+     */
+    private fun sendLiveUpdateToFlutter(currentApp: String, screenTime: Int, monitoringOn: Boolean) {
+        val channel = flutterChannel ?: return
+
+        // Determine if the timer is truly ticking right now
+        val timerTicking = timerRunning && isBlockedApp(currentApp) && monitoringOn
+
+        val status = when {
+            !isScreenOn  -> "idle"
+            timerTicking -> "active"      // phone in use during class
+            else         -> "idle"         // system app, break, or no app
+        }
+
+        // Only report the app name when the timer is actually ticking
+        val reportedApp = if (timerTicking) currentApp else ""
+
+        val args = mapOf(
+            "currentApp"    to reportedApp,
+            "screenTime"    to screenTime,
+            "period"        to currentPeriod,
+            "monitoringOn"  to monitoringOn,
+            "status"        to status
+        )
+        android.os.Handler(android.os.Looper.getMainLooper()).post {
+            channel.invokeMethod("onLiveUpdate", args)
         }
     }
 

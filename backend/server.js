@@ -172,6 +172,112 @@ app.post('/notify-admins', async (req, res) => {
   }
 });
 
+// ── Notify all present students (broadcast from admin monitoring screen) ──────
+// Reads live_monitoring to find all non-offline students, fetches their FCM
+// tokens from fcmTokens/{uid} and broadcasts the admin's message.
+app.post('/notify-class', async (req, res) => {
+  try {
+    if (!firebaseReady) {
+      return res.status(503).json({
+        success: false,
+        error: 'Firebase Admin SDK is not configured on this server'
+      });
+    }
+
+    const { title, body } = req.body || {};
+    if (!title || !body) {
+      return res.status(400).json({
+        success: false,
+        error: 'Missing required fields: title, body'
+      });
+    }
+
+    const db = admin.firestore();
+
+    // Find all students currently present (status != 'offline') in live_monitoring
+    const liveSnap = await db.collection('live_monitoring').get();
+    const presentUids = [];
+    liveSnap.forEach((doc) => {
+      const status = (doc.data()?.status || 'offline').toString();
+      if (status !== 'offline') {
+        presentUids.push(doc.id); // docId = studentUID
+      }
+    });
+
+    if (presentUids.length === 0) {
+      return res.json({
+        success: true,
+        message: 'No present students found',
+        tokenCount: 0,
+        successCount: 0,
+        failureCount: 0
+      });
+    }
+
+    // Fetch FCM tokens for each present student
+    const tokens = [];
+    for (const uid of presentUids) {
+      try {
+        const tokenDoc = await db.collection('fcmTokens').doc(uid).get();
+        const token = (tokenDoc.data()?.token || '').toString().trim();
+        if (token) tokens.push({ uid, token });
+      } catch (_) {}
+    }
+
+    if (tokens.length === 0) {
+      return res.json({
+        success: true,
+        message: 'No FCM tokens found for present students',
+        tokenCount: 0,
+        successCount: 0,
+        failureCount: 0
+      });
+    }
+
+    // Send notification to each student
+    let successCount = 0;
+    let failureCount = 0;
+
+    for (const { uid, token } of tokens) {
+      try {
+        await admin.messaging().send({
+          token,
+          notification: {
+            title: String(title),
+            body: String(body),
+          },
+          data: { type: 'class_notification' },
+          android: {
+            priority: 'high',
+            notification: {
+              sound: 'default',
+              channelId: 'smart_classroom_notifications'
+            }
+          }
+        });
+        successCount++;
+        console.log(`✅ Class notify sent to student ${uid}`);
+      } catch (sendError) {
+        failureCount++;
+        console.error(`❌ Class notify failed for ${uid}:`, sendError?.message || sendError);
+      }
+    }
+
+    console.log(`📢 Class notification sent: ${successCount} success, ${failureCount} failed`);
+    return res.json({
+      success: true,
+      studentCount: presentUids.length,
+      tokenCount: tokens.length,
+      successCount,
+      failureCount
+    });
+
+  } catch (error) {
+    console.error('Error in notify-class:', error);
+    return res.status(500).json({ success: false, error: error.message });
+  }
+});
+
 // ── Violations cleanup helper ────────────────────────────────────────────────
 async function deleteOldViolations() {
   if (!firebaseReady) {
