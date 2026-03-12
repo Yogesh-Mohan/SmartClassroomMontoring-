@@ -95,14 +95,11 @@ class _AdminLoginScreenState extends State<AdminLoginScreen> {
         debugPrint('Admin FCM Save: no current user UID');
         return;
       }
-      await FirebaseFirestore.instance
-          .collection('admins')
-          .doc(uid)
-          .set({
-            'uid': uid,
-            'fcmToken': token,
-            'updatedAt': FieldValue.serverTimestamp(),
-          }, SetOptions(merge: true));
+      await FirebaseFirestore.instance.collection('admins').doc(uid).set({
+        'uid': uid,
+        'fcmToken': token,
+        'updatedAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
       debugPrint('Admin FCM Save: token saved to admins/$uid');
     } catch (e) {
       debugPrint('Admin FCM Save: error — $e');
@@ -126,9 +123,15 @@ class _AdminLoginScreenState extends State<AdminLoginScreen> {
       SnackBar(
         content: Row(
           children: [
-            const Icon(Icons.check_circle_outline, color: Colors.white, size: 18),
+            const Icon(
+              Icons.check_circle_outline,
+              color: Colors.white,
+              size: 18,
+            ),
             const SizedBox(width: 8),
-            Expanded(child: Text(msg, style: GoogleFonts.poppins(fontSize: 13))),
+            Expanded(
+              child: Text(msg, style: GoogleFonts.poppins(fontSize: 13)),
+            ),
           ],
         ),
         backgroundColor: AppColors.success,
@@ -139,10 +142,9 @@ class _AdminLoginScreenState extends State<AdminLoginScreen> {
       ),
     );
   }
+
   void _showForgotPassword() {
-    final ctrl = TextEditingController(
-      text: _emailController.text.trim(),
-    );
+    final ctrl = TextEditingController(text: _emailController.text.trim());
     bool sending = false;
     showDialog(
       context: context,
@@ -150,16 +152,26 @@ class _AdminLoginScreenState extends State<AdminLoginScreen> {
         builder: (ctx, setDialogState) {
           return AlertDialog(
             backgroundColor: const Color(0xFF0D1B3E),
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-            title: Text('Reset Password',
-                style: GoogleFonts.poppins(
-                    color: Colors.white, fontWeight: FontWeight.w600)),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(20),
+            ),
+            title: Text(
+              'Reset Password',
+              style: GoogleFonts.poppins(
+                color: Colors.white,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
             content: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                Text('Enter your registered admin email to receive a reset link.',
-                    style: GoogleFonts.poppins(
-                        fontSize: 13, color: AppColors.textSecondary)),
+                Text(
+                  'Enter your registered admin email to receive a reset link.',
+                  style: GoogleFonts.poppins(
+                    fontSize: 13,
+                    color: AppColors.textSecondary,
+                  ),
+                ),
                 const SizedBox(height: 16),
                 TextField(
                   controller: ctrl,
@@ -175,14 +187,17 @@ class _AdminLoginScreenState extends State<AdminLoginScreen> {
             actions: [
               TextButton(
                 onPressed: sending ? null : () => Navigator.pop(ctx),
-                child: Text('Cancel',
-                    style: GoogleFonts.poppins(color: AppColors.textSecondary)),
+                child: Text(
+                  'Cancel',
+                  style: GoogleFonts.poppins(color: AppColors.textSecondary),
+                ),
               ),
               ElevatedButton(
                 style: ElevatedButton.styleFrom(
                   backgroundColor: AppColors.success,
                   shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12)),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
                 ),
                 onPressed: sending
                     ? null
@@ -191,10 +206,13 @@ class _AdminLoginScreenState extends State<AdminLoginScreen> {
                         if (email.isEmpty) return;
                         setDialogState(() => sending = true);
                         try {
-                          await FirebaseAuth.instance
-                              .sendPasswordResetEmail(email: email);
+                          await FirebaseAuth.instance.sendPasswordResetEmail(
+                            email: email,
+                          );
                           if (ctx.mounted) Navigator.pop(ctx);
-                          _showSuccessSnack('Reset link sent! Check your inbox.');
+                          _showSuccessSnack(
+                            'Reset link sent! Check your inbox.',
+                          );
                         } on FirebaseAuthException catch (e) {
                           setDialogState(() => sending = false);
                           final msg = e.code == 'user-not-found'
@@ -208,11 +226,17 @@ class _AdminLoginScreenState extends State<AdminLoginScreen> {
                       },
                 child: sending
                     ? const SizedBox(
-                        width: 18, height: 18,
+                        width: 18,
+                        height: 18,
                         child: CircularProgressIndicator(
-                            strokeWidth: 2, color: Colors.white))
-                    : Text('Send',
-                        style: GoogleFonts.poppins(color: Colors.white)),
+                          strokeWidth: 2,
+                          color: Colors.white,
+                        ),
+                      )
+                    : Text(
+                        'Send',
+                        style: GoogleFonts.poppins(color: Colors.white),
+                      ),
               ),
             ],
           );
@@ -237,7 +261,9 @@ class _AdminLoginScreenState extends State<AdminLoginScreen> {
           Container(
             width: double.infinity,
             height: double.infinity,
-            decoration: const BoxDecoration(gradient: AppGradients.primaryVertical),
+            decoration: const BoxDecoration(
+              gradient: AppGradients.primaryVertical,
+            ),
           ),
 
           // — Decorative glow circles (green accent for admin)
@@ -273,8 +299,11 @@ class _AdminLoginScreenState extends State<AdminLoginScreen> {
               child: Padding(
                 padding: const EdgeInsets.all(8),
                 child: IconButton(
-                  icon: const Icon(Icons.arrow_back_ios_new_rounded,
-                      color: Colors.white, size: 20),
+                  icon: const Icon(
+                    Icons.arrow_back_ios_new_rounded,
+                    color: Colors.white,
+                    size: 20,
+                  ),
                   onPressed: () => Navigator.of(context).pop(),
                 ).animate().fadeIn(),
               ),
@@ -285,8 +314,10 @@ class _AdminLoginScreenState extends State<AdminLoginScreen> {
           SafeArea(
             child: Center(
               child: SingleChildScrollView(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 28, vertical: 24),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 28,
+                  vertical: 24,
+                ),
                 child: Column(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
@@ -295,19 +326,23 @@ class _AdminLoginScreenState extends State<AdminLoginScreen> {
                     const SizedBox(height: 16),
 
                     // Title + subtitle
-                    Text('Smart Classroom',
-                        style: GoogleFonts.poppins(
-                          fontSize: 24,
-                          fontWeight: FontWeight.w700,
-                          color: Colors.white,
-                          letterSpacing: 0.5,
-                        )).animate().fadeIn(delay: 200.ms),
+                    Text(
+                      'Smart Classroom',
+                      style: GoogleFonts.poppins(
+                        fontSize: 24,
+                        fontWeight: FontWeight.w700,
+                        color: Colors.white,
+                        letterSpacing: 0.5,
+                      ),
+                    ).animate().fadeIn(delay: 200.ms),
                     const SizedBox(height: 4),
-                    Text('Administrator Portal',
-                        style: GoogleFonts.poppins(
-                            fontSize: 13,
-                            color: AppColors.textSecondary))
-                        .animate().fadeIn(delay: 300.ms),
+                    Text(
+                      'Administrator Portal',
+                      style: GoogleFonts.poppins(
+                        fontSize: 13,
+                        color: AppColors.textSecondary,
+                      ),
+                    ).animate().fadeIn(delay: 300.ms),
 
                     const SizedBox(height: 36),
 
@@ -327,23 +362,23 @@ class _AdminLoginScreenState extends State<AdminLoginScreen> {
 
   Widget _buildAvatar() {
     return Container(
-      width: 90,
-      height: 90,
-      decoration: BoxDecoration(
-        shape: BoxShape.circle,
-        gradient: AppGradients.greenGradient,
-        boxShadow: [
-          BoxShadow(
-            color: AppColors.success.withValues(alpha: 0.45),
-            blurRadius: 28,
-            spreadRadius: 2,
-            offset: const Offset(0, 8),
+          width: 120,
+          height: 120,
+          decoration: BoxDecoration(
+            color: Colors.white,
+            shape: BoxShape.circle,
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.15),
+                blurRadius: 20,
+                offset: const Offset(0, 8),
+              ),
+            ],
           ),
-        ],
-      ),
-      child: const Icon(Icons.admin_panel_settings_rounded,
-          size: 44, color: Colors.white),
-    )
+          child: ClipOval(
+            child: Image.asset('assets/images/logo.png', fit: BoxFit.contain),
+          ),
+        )
         .animate()
         .fadeIn(duration: 600.ms)
         .scale(begin: const Offset(0.6, 0.6), curve: Curves.easeOutBack);
@@ -361,20 +396,29 @@ class _AdminLoginScreenState extends State<AdminLoginScreen> {
             color: Colors.white.withValues(alpha: 0.08),
             borderRadius: BorderRadius.circular(24),
             border: Border.all(
-                color: Colors.white.withValues(alpha: 0.18), width: 1.5),
+              color: Colors.white.withValues(alpha: 0.18),
+              width: 1.5,
+            ),
           ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text('Welcome Back',
-                  style: GoogleFonts.poppins(
-                      fontSize: 22,
-                      fontWeight: FontWeight.w700,
-                      color: Colors.white)),
+              Text(
+                'Welcome Back',
+                style: GoogleFonts.poppins(
+                  fontSize: 22,
+                  fontWeight: FontWeight.w700,
+                  color: Colors.white,
+                ),
+              ),
               const SizedBox(height: 4),
-              Text('Sign in to your admin account',
-                  style: GoogleFonts.poppins(
-                      fontSize: 12, color: AppColors.textSecondary)),
+              Text(
+                'Sign in to your admin account',
+                style: GoogleFonts.poppins(
+                  fontSize: 12,
+                  color: AppColors.textSecondary,
+                ),
+              ),
               const SizedBox(height: 28),
 
               // Email field
@@ -410,11 +454,14 @@ class _AdminLoginScreenState extends State<AdminLoginScreen> {
                 alignment: Alignment.centerRight,
                 child: GestureDetector(
                   onTap: _showForgotPassword,
-                  child: Text('Forgot Password?',
-                      style: GoogleFonts.poppins(
-                          fontSize: 12,
-                          color: AppColors.success,
-                          fontWeight: FontWeight.w500)),
+                  child: Text(
+                    'Forgot Password?',
+                    style: GoogleFonts.poppins(
+                      fontSize: 12,
+                      color: AppColors.success,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
                 ),
               ),
               const SizedBox(height: 28),
@@ -440,8 +487,10 @@ class _AdminLoginScreenState extends State<AdminLoginScreen> {
       decoration: BoxDecoration(
         color: Colors.white.withValues(alpha: 0.07),
         borderRadius: BorderRadius.circular(14),
-        border:
-            Border.all(color: Colors.white.withValues(alpha: 0.15), width: 1),
+        border: Border.all(
+          color: Colors.white.withValues(alpha: 0.15),
+          width: 1,
+        ),
       ),
       child: TextField(
         controller: controller,
@@ -450,13 +499,17 @@ class _AdminLoginScreenState extends State<AdminLoginScreen> {
         style: GoogleFonts.poppins(color: Colors.white, fontSize: 14),
         decoration: InputDecoration(
           labelText: label,
-          labelStyle:
-              GoogleFonts.poppins(color: AppColors.textSecondary, fontSize: 13),
+          labelStyle: GoogleFonts.poppins(
+            color: AppColors.textSecondary,
+            fontSize: 13,
+          ),
           prefixIcon: Icon(icon, color: AppColors.textSecondary, size: 20),
           suffixIcon: suffix,
           border: InputBorder.none,
-          contentPadding:
-              const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+          contentPadding: const EdgeInsets.symmetric(
+            horizontal: 16,
+            vertical: 16,
+          ),
         ),
       ),
     );
@@ -484,26 +537,35 @@ class _AdminLoginScreenState extends State<AdminLoginScreen> {
             backgroundColor: Colors.transparent,
             shadowColor: Colors.transparent,
             shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(16)),
+              borderRadius: BorderRadius.circular(16),
+            ),
           ),
           child: _loading
               ? const SizedBox(
                   width: 22,
                   height: 22,
                   child: CircularProgressIndicator(
-                      strokeWidth: 2.5, color: Colors.white),
+                    strokeWidth: 2.5,
+                    color: Colors.white,
+                  ),
                 )
               : Row(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
-                    Text('Sign In',
-                        style: GoogleFonts.poppins(
-                            fontSize: 16,
-                            fontWeight: FontWeight.w600,
-                            color: Colors.white)),
+                    Text(
+                      'Sign In',
+                      style: GoogleFonts.poppins(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w600,
+                        color: Colors.white,
+                      ),
+                    ),
                     const SizedBox(width: 8),
-                    const Icon(Icons.arrow_forward_rounded,
-                        color: Colors.white, size: 20),
+                    const Icon(
+                      Icons.arrow_forward_rounded,
+                      color: Colors.white,
+                      size: 20,
+                    ),
                   ],
                 ),
         ),

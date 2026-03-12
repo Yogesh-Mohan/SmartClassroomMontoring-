@@ -27,8 +27,9 @@ class RoleSelectScreen extends StatelessWidget {
       body: Stack(
         children: [
           Container(
-            decoration:
-                const BoxDecoration(gradient: AppGradients.primaryVertical),
+            decoration: const BoxDecoration(
+              gradient: AppGradients.primaryVertical,
+            ),
           ),
           // Top glow
           Positioned(
@@ -58,36 +59,39 @@ class RoleSelectScreen extends StatelessWidget {
           ),
           SafeArea(
             child: Padding(
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 28, vertical: 24),
+              padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 24),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.center,
                 children: [
                   const SizedBox(height: 30),
                   // Logo
                   Container(
-                    width: 80,
-                    height: 80,
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      gradient: AppGradients.blueGradient,
-                      boxShadow: [
-                        BoxShadow(
-                          color: AppColors.lightBlue.withValues(alpha: 0.4),
-                          blurRadius: 24,
-                          spreadRadius: 2,
-                          offset: const Offset(0, 6),
+                        width: 120,
+                        height: 120,
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          shape: BoxShape.circle,
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.black.withValues(alpha: 0.15),
+                              blurRadius: 20,
+                              offset: const Offset(0, 8),
+                            ),
+                          ],
                         ),
-                      ],
-                    ),
-                    child: const Icon(Icons.psychology_rounded,
-                        size: 38, color: Colors.white),
-                  )
+                        child: ClipOval(
+                          child: Image.asset(
+                            'assets/images/logo.png',
+                            fit: BoxFit.contain,
+                          ),
+                        ),
+                      )
                       .animate()
                       .fadeIn(duration: 700.ms)
                       .scale(
-                          begin: const Offset(0.5, 0.5),
-                          curve: Curves.easeOutBack),
+                        begin: const Offset(0.5, 0.5),
+                        curve: Curves.easeOutBack,
+                      ),
 
                   const SizedBox(height: 18),
                   Text(
@@ -103,7 +107,9 @@ class RoleSelectScreen extends StatelessWidget {
                   Text(
                     'Monitoring System',
                     style: GoogleFonts.poppins(
-                        fontSize: 13, color: AppColors.textSecondary),
+                      fontSize: 13,
+                      color: AppColors.textSecondary,
+                    ),
                   ).animate().fadeIn(delay: 300.ms),
 
                   const Spacer(),
@@ -111,9 +117,10 @@ class RoleSelectScreen extends StatelessWidget {
                   Text(
                     'Select your role',
                     style: GoogleFonts.poppins(
-                        fontSize: 15,
-                        fontWeight: FontWeight.w500,
-                        color: AppColors.textSecondary),
+                      fontSize: 15,
+                      fontWeight: FontWeight.w500,
+                      color: AppColors.textSecondary,
+                    ),
                   ).animate().fadeIn(delay: 400.ms),
                   const SizedBox(height: 24),
 
@@ -125,8 +132,7 @@ class RoleSelectScreen extends StatelessWidget {
                     gradient: AppGradients.blueGradient,
                     glowColor: AppColors.lightBlue,
                     delay: 500,
-                    onTap: () =>
-                        _navigate(context, const StudentLoginScreen()),
+                    onTap: () => _navigate(context, const StudentLoginScreen()),
                   ),
                   const SizedBox(height: 20),
 
@@ -146,7 +152,9 @@ class RoleSelectScreen extends StatelessWidget {
                   Text(
                     'Smart Classroom © 2025',
                     style: GoogleFonts.poppins(
-                        fontSize: 11, color: AppColors.textSecondary),
+                      fontSize: 11,
+                      color: AppColors.textSecondary,
+                    ),
                   ).animate().fadeIn(delay: 800.ms),
                   const SizedBox(height: 8),
                 ],
@@ -181,69 +189,79 @@ class _RoleCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return GestureDetector(
-      onTap: onTap,
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(22),
-        child: BackdropFilter(
-          filter: ImageFilter.blur(sigmaX: 14, sigmaY: 14),
-          child: Container(
-            width: double.infinity,
-            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
-            decoration: BoxDecoration(
-              color: Colors.white.withValues(alpha: 0.08),
-              borderRadius: BorderRadius.circular(22),
-              border: Border.all(
-                  color: Colors.white.withValues(alpha: 0.18), width: 1.5),
-            ),
-            child: Row(
-              children: [
-                Container(
-                  width: 58,
-                  height: 58,
-                  decoration: BoxDecoration(
-                    gradient: gradient,
-                    borderRadius: BorderRadius.circular(16),
-                    boxShadow: [
-                      BoxShadow(
-                        color: glowColor.withValues(alpha: 0.4),
-                        blurRadius: 16,
-                        offset: const Offset(0, 4),
-                      ),
-                    ],
-                  ),
-                  child: Icon(icon, color: Colors.white, size: 28),
+          onTap: onTap,
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(22),
+            child: BackdropFilter(
+              filter: ImageFilter.blur(sigmaX: 14, sigmaY: 14),
+              child: Container(
+                width: double.infinity,
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 24,
+                  vertical: 20,
                 ),
-                const SizedBox(width: 18),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        label,
-                        style: GoogleFonts.poppins(
-                            fontSize: 18,
-                            fontWeight: FontWeight.w700,
-                            color: Colors.white),
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        subtitle,
-                        style: GoogleFonts.poppins(
-                            fontSize: 12,
-                            color: AppColors.textSecondary,
-                            height: 1.4),
-                      ),
-                    ],
+                decoration: BoxDecoration(
+                  color: Colors.white.withValues(alpha: 0.08),
+                  borderRadius: BorderRadius.circular(22),
+                  border: Border.all(
+                    color: Colors.white.withValues(alpha: 0.18),
+                    width: 1.5,
                   ),
                 ),
-                const Icon(Icons.arrow_forward_ios_rounded,
-                    color: Colors.white54, size: 18),
-              ],
+                child: Row(
+                  children: [
+                    Container(
+                      width: 58,
+                      height: 58,
+                      decoration: BoxDecoration(
+                        gradient: gradient,
+                        borderRadius: BorderRadius.circular(16),
+                        boxShadow: [
+                          BoxShadow(
+                            color: glowColor.withValues(alpha: 0.4),
+                            blurRadius: 16,
+                            offset: const Offset(0, 4),
+                          ),
+                        ],
+                      ),
+                      child: Icon(icon, color: Colors.white, size: 28),
+                    ),
+                    const SizedBox(width: 18),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            label,
+                            style: GoogleFonts.poppins(
+                              fontSize: 18,
+                              fontWeight: FontWeight.w700,
+                              color: Colors.white,
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            subtitle,
+                            style: GoogleFonts.poppins(
+                              fontSize: 12,
+                              color: AppColors.textSecondary,
+                              height: 1.4,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const Icon(
+                      Icons.arrow_forward_ios_rounded,
+                      color: Colors.white54,
+                      size: 18,
+                    ),
+                  ],
+                ),
+              ),
             ),
           ),
-        ),
-      ),
-    )
+        )
         .animate()
         .fadeIn(delay: Duration(milliseconds: delay))
         .slideX(begin: 0.1, end: 0);

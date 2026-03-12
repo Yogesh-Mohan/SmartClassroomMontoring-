@@ -72,7 +72,18 @@ class AttendanceService {
       // ── Duplicate guard ──────────────────────────────────────────────
       final existing = await docRef.get();
       if (existing.exists) {
-        debugPrint('[Attendance] Doc $docId already exists — skipping create.');
+        // Same-day re-login: reactivate presence by clearing logout markers.
+        await docRef.set({
+          'studentUID': uid,
+          'studentName': studentData['name'] ?? studentData['studentName'] ?? '',
+          'regNo':
+              studentData['regNo'] ?? studentData['registrationNumber'] ?? '',
+          'date': dateKey,
+          'reloginTime': FieldValue.serverTimestamp(),
+          'logoutTime': FieldValue.delete(),
+          'logoutType': FieldValue.delete(),
+        }, SetOptions(merge: true));
+        debugPrint('[Attendance] Doc $docId re-activated for re-login.');
         return false;
       }
 

@@ -66,6 +66,12 @@ class MainActivity : FlutterActivity() {
                         MonitoringService.dartDebugInfo = info
                         result.success(null)
                     }
+                    "setAdminMonitoring" -> {
+                        // Admin master switch: true = monitoring ON, false = monitoring PAUSED
+                        val enabled = call.argument<Boolean>("enabled") ?: true
+                        MonitoringService.adminMonitoringEnabled = enabled
+                        result.success(null)
+                    }
                     else -> result.notImplemented()
                 }
             }

@@ -93,6 +93,21 @@ class AdminDashboardService {
         .trim();
   }
 
+        String _attendanceUid(String docId, Map<String, dynamic> row) {
+          final direct =
+              (row['studentUID'] ?? row['studentUid'] ?? row['uid'] ?? '')
+                  .toString()
+                  .trim();
+          if (direct.isNotEmpty) return direct;
+
+          final normalizedDocId = docId.trim();
+          final suffixPattern = RegExp(r'_[0-9]{4}_[0-9]{2}_[0-9]{2}$');
+          if (suffixPattern.hasMatch(normalizedDocId) && normalizedDocId.length > 11) {
+            return normalizedDocId.substring(0, normalizedDocId.length - 11);
+          }
+          return normalizedDocId;
+        }
+
   Stream<List<AdminStudentRow>> streamTotalStudentsList() {
     return _db.collection('students').snapshots().map((snap) {
       final rows = snap.docs
@@ -133,7 +148,7 @@ class AdminDashboardService {
         final row = doc.data();
         // Only include students who are currently inside (no logoutTime yet)
         if (row['logoutTime'] != null) continue;
-        final uid = (row['studentUID'] ?? '').toString().trim();
+        final uid = _attendanceUid(doc.id, row);
         if (uid.isEmpty) continue;
 
         // Merge attendance + student profile to get full details
@@ -163,7 +178,7 @@ class AdminDashboardService {
       for (final doc in attendanceSnap.docs) {
         // Only treat as "currently present" if they haven't logged out yet
         if (doc.data()['logoutTime'] != null) continue;
-        final uid = (doc.data()['studentUID'] ?? '').toString().trim();
+        final uid = _attendanceUid(doc.id, doc.data());
         if (uid.isNotEmpty) loggedUids.add(uid);
       }
 

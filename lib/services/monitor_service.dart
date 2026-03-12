@@ -52,11 +52,13 @@ class ScreenMonitorService {
       final screenTime = (args['screenTime'] as num?)?.toInt() ?? 0;
       final period = (args['period'] as String?) ?? '';
       final status = (args['status'] as String?) ?? 'active';
+      final mode = (args['mode'] as String?) ?? 'active';
 
       _liveMonitor.updateCurrentApp(currentApp);
       _liveMonitor.updateScreenTime(screenTime);
       _liveMonitor.updateCurrentPeriod(period);
       _liveMonitor.updateStatus(status);
+      _liveMonitor.updateMode(mode);
     }
   }
 
@@ -75,10 +77,13 @@ class ScreenMonitorService {
 
       await FirebaseFirestore.instance.collection('violations').add({
         'studentUID': violationOwnerId,
-        'name': _studentName,
+        'studentName': _studentName,
         'regNo': _regNo,
         'secondsUsed': secondsUsed,
         'period': period,
+        'violationType': 'phone_usage',
+        // Backward-compat fields used by existing admin screens.
+        'name': _studentName,
         'type': 'phone_usage',
         'timestamp': FieldValue.serverTimestamp(),
       });
@@ -100,13 +105,16 @@ class ScreenMonitorService {
     try {
       final sent = await _notifyAdminsViaFunction(
         title: '🔔 Violation Detected!',
-        body: '$_studentName - $period - ${secondsUsed}s phone usage',
+        body:
+            '$_studentName ($_regNo) used phone for ${secondsUsed}s in $period.',
         data: {
           'studentName': _studentName,
+          'regNo': _regNo,
           'period': period,
           'secondsUsed': secondsUsed.toString(),
           'timestamp': DateTime.now().toIso8601String(),
           'type': 'violation',
+          'violationType': 'phone_usage',
         },
       );
 
@@ -231,6 +239,36 @@ class ScreenMonitorService {
       _isMonitoring = false;
     }
     return _isMonitoring;
+  }
+
+  /// Admin master switch — enables or disables monitoring globally.
+  ///
+  /// When [enabled] = false:
+  ///   - Native service stops counting time
+  ///   - No violations are triggered
+  ///   - Students can use their phones freely
+  ///
+  /// Writes to Firestore `monitoring_settings/global` so all student
+  /// devices pick up the change in real-time via their Firestore listener.
+  Future<void> setAdminMonitoring(bool enabled) async {
+    try {
+      // Push to native (affects THIS device's state immediately)
+      await _channel.invokeMethod('setAdminMonitoring', {'enabled': enabled});
+    } on PlatformException catch (e) {
+      debugPrint(
+        '[Monitor] setAdminMonitoring native call failed: ${e.message}',
+      );
+    }
+    // Write to Firestore — all student devices read this and pause/resume
+    try {
+      await FirebaseFirestore.instance
+          .collection('monitoring_settings')
+          .doc('global')
+          .set({'monitoringEnabled': enabled}, SetOptions(merge: true));
+      debugPrint('[Monitor] Admin monitoring switch set to: $enabled');
+    } catch (e) {
+      debugPrint('[Monitor] Failed to write monitoring_settings: $e');
+    }
   }
 
   /// Check if the app has been granted Usage Access (PACKAGE_USAGE_STATS).

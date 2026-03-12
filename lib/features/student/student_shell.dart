@@ -1,11 +1,14 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_gradients.dart';
 import '../../services/attendance_service.dart';
 import '../../services/monitor_service.dart';
 import '../../services/timetable_monitor.dart';
+import '../auth/student_auth_service.dart';
+import '../role_select/role_select_screen.dart';
 import 'home/student_home_screen.dart';
 import 'credits/credits_screen.dart';
 import 'timetable/timetable_screen.dart';
@@ -25,7 +28,7 @@ class _StudentShellState extends State<StudentShell> {
 
   late final List<Widget> _pages;
   final ScreenMonitorService _monitorService = ScreenMonitorService();
-  final TimetableMonitor     _timetableMonitor = TimetableMonitor();
+  final TimetableMonitor _timetableMonitor = TimetableMonitor();
 
   @override
   void initState() {
@@ -44,36 +47,46 @@ class _StudentShellState extends State<StudentShell> {
       ),
       StudentProfileScreen(studentData: widget.studentData),
     ];
-    
+
     // Start screen monitoring for this student
     _initializeMonitoring();
   }
- 
-  Future<void> _initializeMonitoring() async {
-    final studentId   = widget.studentData['id'] ??
-        widget.studentData['registrationNumber'] ?? 'unknown';
-    final studentName = widget.studentData['name'] ?? 'Student';
-    final regNo       = (widget.studentData['studentId'] ??
-        widget.studentData['registrationNumber'] ??
-        widget.studentData['regNo'] ??
-        widget.studentData['rollNo'] ??
-        '').toString();
 
-    // Check Usage Access permission — needed for foreground app detection.
-    // Service still starts in fail-safe mode even without it.
-    final hasPermission = await _monitorService.hasUsagePermission();
-    if (!hasPermission && mounted) {
-      _showUsagePermissionDialog();
+  Future<void> _initializeMonitoring() async {
+    final hasPermissions = await _hasRequiredPermissions();
+    if (!hasPermissions) {
+      await StudentAuthService.signOut();
+      if (!mounted) return;
+      Navigator.of(context).pushAndRemoveUntil(
+        MaterialPageRoute(builder: (_) => const RoleSelectScreen()),
+        (_) => false,
+      );
+      return;
     }
+
+    final studentId =
+        widget.studentData['id'] ??
+        widget.studentData['registrationNumber'] ??
+        'unknown';
+    final studentName = widget.studentData['name'] ?? 'Student';
+    final regNo =
+        (widget.studentData['studentId'] ??
+                widget.studentData['registrationNumber'] ??
+                widget.studentData['regNo'] ??
+                widget.studentData['rollNo'] ??
+                '')
+            .toString();
 
     final started = await _monitorService.startMonitoring(
       studentId,
       studentName,
       regNo: regNo,
     );
-    debugPrint(started
-        ? 'Screen monitoring started for: $studentName'
-        : 'Failed to start screen monitoring');
+    debugPrint(
+      started
+          ? 'Screen monitoring started for: $studentName'
+          : 'Failed to start screen monitoring',
+    );
 
     // ── Create today's attendance record (duplicate-safe) ─────────────────
     try {
@@ -164,33 +177,22 @@ class _StudentShellState extends State<StudentShell> {
     return out;
   }
 
-  void _showUsagePermissionDialog() {
-    showDialog<void>(
-      context: context,
-      barrierDismissible: false,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Permission Required'),
-        content: const Text(
-          'This app needs Usage Access permission to monitor which apps '
-          'are being used on the screen.\n\n'
-          'Please enable it for "Smart Classroom" in the next screen.\n\n'
-          'Go to: Settings → Apps → Special App Access → Usage Access',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(),
-            child: const Text('Later'),
-          ),
-          ElevatedButton(
-            onPressed: () {
-              Navigator.of(ctx).pop();
-              _monitorService.requestUsagePermission();
-            },
-            child: const Text('Open Settings'),
-          ),
-        ],
-      ),
-    );
+  Future<bool> _hasRequiredPermissions() async {
+    try {
+      final usageGranted = await _monitorService.hasUsagePermission();
+      if (!usageGranted) {
+        return false;
+      }
+
+      final notificationSettings = await FirebaseMessaging.instance
+          .getNotificationSettings();
+      return notificationSettings.authorizationStatus ==
+              AuthorizationStatus.authorized ||
+          notificationSettings.authorizationStatus ==
+              AuthorizationStatus.provisional;
+    } catch (_) {
+      return false;
+    }
   }
 
   @override
@@ -203,9 +205,21 @@ class _StudentShellState extends State<StudentShell> {
 
   static const _navItems = [
     _NavItem(Icons.home_rounded, Icons.home_outlined, 'Home'),
-    _NavItem(Icons.workspace_premium_rounded, Icons.workspace_premium_outlined, 'Credits'),
-    _NavItem(Icons.calendar_month_rounded, Icons.calendar_month_outlined, 'Schedule'),
-    _NavItem(Icons.notifications_rounded, Icons.notifications_outlined, 'Alerts'),
+    _NavItem(
+      Icons.workspace_premium_rounded,
+      Icons.workspace_premium_outlined,
+      'Credits',
+    ),
+    _NavItem(
+      Icons.calendar_month_rounded,
+      Icons.calendar_month_outlined,
+      'Schedule',
+    ),
+    _NavItem(
+      Icons.notifications_rounded,
+      Icons.notifications_outlined,
+      'Alerts',
+    ),
     _NavItem(Icons.person_rounded, Icons.person_outlined, 'Profile'),
   ];
 
@@ -214,28 +228,28 @@ class _StudentShellState extends State<StudentShell> {
     return Scaffold(
       body: Container(
         decoration: const BoxDecoration(gradient: AppGradients.primaryVertical),
-        child: IndexedStack(
-          index: _currentIndex,
-          children: _pages,
-        ),
+        child: IndexedStack(index: _currentIndex, children: _pages),
       ),
       bottomNavigationBar: _buildNav(),
     );
   }
 
   Widget _buildNav() {
+    final bottomInset = MediaQuery.of(context).viewPadding.bottom;
     return Container(
       decoration: BoxDecoration(
         color: const Color(0xFF050520),
         border: Border(
-            top: BorderSide(
-                color: Colors.white.withValues(alpha: 0.1), width: 1)),
+          top: BorderSide(color: Colors.white.withValues(alpha: 0.1), width: 1),
+        ),
         boxShadow: [
-          BoxShadow(
-              color: Colors.black.withValues(alpha: 0.4), blurRadius: 12)
+          BoxShadow(color: Colors.black.withValues(alpha: 0.4), blurRadius: 12),
         ],
       ),
-      padding: const EdgeInsets.only(bottom: 6, top: 6),
+      padding: EdgeInsets.only(
+        bottom: (bottomInset > 0 ? bottomInset : 6) + 6,
+        top: 6,
+      ),
       child: Row(
         children: List.generate(_navItems.length, (i) {
           final item = _navItems[i];

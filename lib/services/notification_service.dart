@@ -16,9 +16,9 @@ class NotificationService {
   factory NotificationService() => _instance;
   NotificationService._internal();
 
-  final FlutterLocalNotificationsPlugin _notificationsPlugin = 
+  final FlutterLocalNotificationsPlugin _notificationsPlugin =
       FlutterLocalNotificationsPlugin();
-  
+
   bool _isInitialized = false;
   bool _isFcmListenerRegistered = false;
   void Function(NotificationAction action)? _actionHandler;
@@ -31,7 +31,9 @@ class NotificationService {
   Future<void> initialize() async {
     if (_isInitialized) return;
 
-    const androidSettings = AndroidInitializationSettings('@mipmap/ic_launcher');
+    const androidSettings = AndroidInitializationSettings(
+      '@mipmap/kr_launcher_new',
+    );
     const iosSettings = DarwinInitializationSettings(
       requestAlertPermission: true,
       requestBadgePermission: true,
@@ -62,7 +64,8 @@ class NotificationService {
 
     await _notificationsPlugin
         .resolvePlatformSpecificImplementation<
-            AndroidFlutterLocalNotificationsPlugin>()
+          AndroidFlutterLocalNotificationsPlugin
+        >()
         ?.createNotificationChannel(androidChannel);
 
     // Create notification channel used by backend FCM payloads.
@@ -76,9 +79,10 @@ class NotificationService {
     );
 
     await _notificationsPlugin
-      .resolvePlatformSpecificImplementation<
-        AndroidFlutterLocalNotificationsPlugin>()
-      ?.createNotificationChannel(backendChannel);
+        .resolvePlatformSpecificImplementation<
+          AndroidFlutterLocalNotificationsPlugin
+        >()
+        ?.createNotificationChannel(backendChannel);
 
     _isInitialized = true;
     debugPrint('Notification service initialized');
@@ -107,7 +111,7 @@ class NotificationService {
       ledColor: Color.fromARGB(255, 255, 0, 0),
       ledOnMs: 1000,
       ledOffMs: 500,
-      icon: '@mipmap/ic_launcher',
+      icon: '@mipmap/kr_launcher_new',
       fullScreenIntent: true,
       category: AndroidNotificationCategory.alarm,
       visibility: NotificationVisibility.public,
@@ -156,7 +160,7 @@ class NotificationService {
       priority: Priority.high,
       playSound: true,
       enableVibration: true,
-      icon: '@mipmap/ic_launcher',
+      icon: '@mipmap/kr_launcher_new',
       category: AndroidNotificationCategory.message,
       visibility: NotificationVisibility.public,
     );
@@ -188,16 +192,18 @@ class NotificationService {
 
     await initialize();
 
-    await FirebaseMessaging.instance.setForegroundNotificationPresentationOptions(
-      alert: true,
-      badge: true,
-      sound: true,
-    );
+    await FirebaseMessaging.instance
+        .setForegroundNotificationPresentationOptions(
+          alert: true,
+          badge: true,
+          sound: true,
+        );
 
     FirebaseMessaging.onMessage.listen((RemoteMessage message) async {
       final title =
           message.notification?.title ?? message.data['title']?.toString();
-      final body = message.notification?.body ?? message.data['body']?.toString();
+      final body =
+          message.notification?.body ?? message.data['body']?.toString();
 
       if ((title ?? '').trim().isEmpty && (body ?? '').trim().isEmpty) {
         debugPrint('[FCM] Foreground message received without display content');
@@ -261,15 +267,17 @@ class NotificationService {
 
     final androidImpl = _notificationsPlugin
         .resolvePlatformSpecificImplementation<
-            AndroidFlutterLocalNotificationsPlugin>();
-    
+          AndroidFlutterLocalNotificationsPlugin
+        >();
+
     final iosImpl = _notificationsPlugin
         .resolvePlatformSpecificImplementation<
-            IOSFlutterLocalNotificationsPlugin>();
+          IOSFlutterLocalNotificationsPlugin
+        >();
 
     // Request Android 13+ notification permission
     final androidGranted = await androidImpl?.requestNotificationsPermission();
-    
+
     // Request iOS permissions
     final iosGranted = await iosImpl?.requestPermissions(
       alert: true,

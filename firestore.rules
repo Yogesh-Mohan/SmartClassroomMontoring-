@@ -219,6 +219,15 @@ service cloud.firestore {
       allow delete: if false;
     }
 
+    // ── MONITORING SETTINGS (Admin master switch) ─────────────────────────────
+    // Admin writes monitoringEnabled toggle.
+    // All authenticated users (including students) can read so they can
+    // react to the admin switch in real-time.
+    match /monitoring_settings/{docId} {
+      allow read: if request.auth != null;
+      allow write: if isAdmin();
+    }
+
     // ── BLOCK EVERYTHING ELSE ────────────────────────────────────────────────
     match /{document=**} {
       allow read, write: if false;

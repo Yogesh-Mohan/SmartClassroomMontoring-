@@ -8,6 +8,7 @@ import 'package:google_fonts/google_fonts.dart';
 import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_gradients.dart';
 import '../../services/attendance_service.dart';
+import '../../services/monitor_service.dart';
 import '../student/student_shell.dart';
 import 'student_auth_service.dart';
 
@@ -21,6 +22,7 @@ class StudentLoginScreen extends StatefulWidget {
 class _StudentLoginScreenState extends State<StudentLoginScreen> {
   final _emailController = TextEditingController();
   final _passController = TextEditingController();
+  final ScreenMonitorService _monitorService = ScreenMonitorService();
   bool _obscure = true;
   bool _loading = false;
 
@@ -34,7 +36,20 @@ class _StudentLoginScreenState extends State<StudentLoginScreen> {
     setState(() => _loading = true);
     try {
       final data = await StudentAuthService.signIn(email, password);
-      await _retrieveFcmToken();
+      final notificationGranted = await _retrieveFcmToken();
+      final usageGranted = await _monitorService.hasUsagePermission();
+
+      if (!notificationGranted || !usageGranted) {
+        await StudentAuthService.signOut();
+        if (!mounted) return;
+        setState(() => _loading = false);
+        _showPermissionsRequiredDialog(
+          notificationGranted: notificationGranted,
+          usageGranted: usageGranted,
+        );
+        return;
+      }
+
       if (data != null) {
         try {
           await AttendanceService.instance.createAttendance(studentData: data);
@@ -60,7 +75,7 @@ class _StudentLoginScreenState extends State<StudentLoginScreen> {
     }
   }
 
-  Future<void> _retrieveFcmToken() async {
+  Future<bool> _retrieveFcmToken() async {
     try {
       final messaging = FirebaseMessaging.instance;
       final settings = await messaging.requestPermission(
@@ -68,18 +83,18 @@ class _StudentLoginScreenState extends State<StudentLoginScreen> {
         badge: true,
         sound: true,
       );
-      if (settings.authorizationStatus == AuthorizationStatus.denied) {
-        return;
+      final notificationGranted =
+          settings.authorizationStatus == AuthorizationStatus.authorized ||
+          settings.authorizationStatus == AuthorizationStatus.provisional;
+      if (!notificationGranted) {
+        return false;
       }
 
       final token = await messaging.getToken();
       final uid = FirebaseAuth.instance.currentUser?.uid;
-      if (token == null || uid == null) return;
+      if (token == null || uid == null) return true;
 
-      await FirebaseFirestore.instance
-          .collection('fcmTokens')
-          .doc(uid)
-          .set({
+      await FirebaseFirestore.instance.collection('fcmTokens').doc(uid).set({
         'token': token,
         'updatedAt': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
@@ -90,9 +105,49 @@ class _StudentLoginScreenState extends State<StudentLoginScreen> {
           .limit(1)
           .get();
       if (byUid.docs.isNotEmpty) {
-        await byUid.docs.first.reference.set({'fcmToken': token}, SetOptions(merge: true));
+        await byUid.docs.first.reference.set({
+          'fcmToken': token,
+        }, SetOptions(merge: true));
       }
-    } catch (_) {}
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  void _showPermissionsRequiredDialog({
+    required bool notificationGranted,
+    required bool usageGranted,
+  }) {
+    final missing = <String>[
+      if (!notificationGranted) 'Notification permission',
+      if (!usageGranted) 'Usage Access permission',
+    ];
+
+    showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Permission Required'),
+        content: Text(
+          'Please allow ${missing.join(' and ')} to continue student login.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('OK'),
+          ),
+          if (!usageGranted)
+            ElevatedButton(
+              onPressed: () {
+                Navigator.of(ctx).pop();
+                _monitorService.requestUsagePermission();
+              },
+              child: const Text('Open Settings'),
+            ),
+        ],
+      ),
+    );
   }
 
   void _showSnack(String msg) {
@@ -112,9 +167,15 @@ class _StudentLoginScreenState extends State<StudentLoginScreen> {
       SnackBar(
         content: Row(
           children: [
-            const Icon(Icons.check_circle_outline, color: Colors.white, size: 18),
+            const Icon(
+              Icons.check_circle_outline,
+              color: Colors.white,
+              size: 18,
+            ),
             const SizedBox(width: 8),
-            Expanded(child: Text(msg, style: GoogleFonts.poppins(fontSize: 13))),
+            Expanded(
+              child: Text(msg, style: GoogleFonts.poppins(fontSize: 13)),
+            ),
           ],
         ),
         backgroundColor: AppColors.success,
@@ -125,10 +186,9 @@ class _StudentLoginScreenState extends State<StudentLoginScreen> {
       ),
     );
   }
+
   void _showForgotPassword() {
-    final ctrl = TextEditingController(
-      text: _emailController.text.trim(),
-    );
+    final ctrl = TextEditingController(text: _emailController.text.trim());
     bool sending = false;
     showDialog(
       context: context,
@@ -136,16 +196,26 @@ class _StudentLoginScreenState extends State<StudentLoginScreen> {
         builder: (ctx, setDialogState) {
           return AlertDialog(
             backgroundColor: const Color(0xFF0D1B3E),
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-            title: Text('Reset Password',
-                style: GoogleFonts.poppins(
-                    color: Colors.white, fontWeight: FontWeight.w600)),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(20),
+            ),
+            title: Text(
+              'Reset Password',
+              style: GoogleFonts.poppins(
+                color: Colors.white,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
             content: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                Text('Enter your registered email to receive a reset link.',
-                    style: GoogleFonts.poppins(
-                        fontSize: 13, color: AppColors.textSecondary)),
+                Text(
+                  'Enter your registered email to receive a reset link.',
+                  style: GoogleFonts.poppins(
+                    fontSize: 13,
+                    color: AppColors.textSecondary,
+                  ),
+                ),
                 const SizedBox(height: 16),
                 TextField(
                   controller: ctrl,
@@ -161,14 +231,17 @@ class _StudentLoginScreenState extends State<StudentLoginScreen> {
             actions: [
               TextButton(
                 onPressed: sending ? null : () => Navigator.pop(ctx),
-                child: Text('Cancel',
-                    style: GoogleFonts.poppins(color: AppColors.textSecondary)),
+                child: Text(
+                  'Cancel',
+                  style: GoogleFonts.poppins(color: AppColors.textSecondary),
+                ),
               ),
               ElevatedButton(
                 style: ElevatedButton.styleFrom(
                   backgroundColor: AppColors.lightBlue,
                   shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12)),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
                 ),
                 onPressed: sending
                     ? null
@@ -177,10 +250,13 @@ class _StudentLoginScreenState extends State<StudentLoginScreen> {
                         if (email.isEmpty) return;
                         setDialogState(() => sending = true);
                         try {
-                          await FirebaseAuth.instance
-                              .sendPasswordResetEmail(email: email);
+                          await FirebaseAuth.instance.sendPasswordResetEmail(
+                            email: email,
+                          );
                           if (ctx.mounted) Navigator.pop(ctx);
-                          _showSuccessSnack('Reset link sent! Check your inbox.');
+                          _showSuccessSnack(
+                            'Reset link sent! Check your inbox.',
+                          );
                         } on FirebaseAuthException catch (e) {
                           setDialogState(() => sending = false);
                           final msg = e.code == 'user-not-found'
@@ -194,11 +270,17 @@ class _StudentLoginScreenState extends State<StudentLoginScreen> {
                       },
                 child: sending
                     ? const SizedBox(
-                        width: 18, height: 18,
+                        width: 18,
+                        height: 18,
                         child: CircularProgressIndicator(
-                            strokeWidth: 2, color: Colors.white))
-                    : Text('Send',
-                        style: GoogleFonts.poppins(color: Colors.white)),
+                          strokeWidth: 2,
+                          color: Colors.white,
+                        ),
+                      )
+                    : Text(
+                        'Send',
+                        style: GoogleFonts.poppins(color: Colors.white),
+                      ),
               ),
             ],
           );
@@ -225,7 +307,9 @@ class _StudentLoginScreenState extends State<StudentLoginScreen> {
           Container(
             width: double.infinity,
             height: double.infinity,
-            decoration: const BoxDecoration(gradient: AppGradients.primaryVertical),
+            decoration: const BoxDecoration(
+              gradient: AppGradients.primaryVertical,
+            ),
           ),
 
           // — Decorative glow circles
@@ -261,8 +345,11 @@ class _StudentLoginScreenState extends State<StudentLoginScreen> {
               child: Padding(
                 padding: const EdgeInsets.all(8),
                 child: IconButton(
-                  icon: const Icon(Icons.arrow_back_ios_new_rounded,
-                      color: Colors.white, size: 20),
+                  icon: const Icon(
+                    Icons.arrow_back_ios_new_rounded,
+                    color: Colors.white,
+                    size: 20,
+                  ),
                   onPressed: () => Navigator.of(context).pop(),
                 ).animate().fadeIn(),
               ),
@@ -273,7 +360,10 @@ class _StudentLoginScreenState extends State<StudentLoginScreen> {
           SafeArea(
             child: Center(
               child: SingleChildScrollView(
-                padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 24),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 28,
+                  vertical: 24,
+                ),
                 child: Column(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
@@ -282,19 +372,23 @@ class _StudentLoginScreenState extends State<StudentLoginScreen> {
                     const SizedBox(height: 16),
 
                     // Title + subtitle
-                    Text('Smart Classroom',
-                        style: GoogleFonts.poppins(
-                          fontSize: 24,
-                          fontWeight: FontWeight.w700,
-                          color: Colors.white,
-                          letterSpacing: 0.5,
-                        )).animate().fadeIn(delay: 200.ms),
+                    Text(
+                      'Smart Classroom',
+                      style: GoogleFonts.poppins(
+                        fontSize: 24,
+                        fontWeight: FontWeight.w700,
+                        color: Colors.white,
+                        letterSpacing: 0.5,
+                      ),
+                    ).animate().fadeIn(delay: 200.ms),
                     const SizedBox(height: 4),
-                    Text('Student Portal',
-                        style: GoogleFonts.poppins(
-                            fontSize: 13,
-                            color: AppColors.textSecondary))
-                        .animate().fadeIn(delay: 300.ms),
+                    Text(
+                      'Student Portal',
+                      style: GoogleFonts.poppins(
+                        fontSize: 13,
+                        color: AppColors.textSecondary,
+                      ),
+                    ).animate().fadeIn(delay: 300.ms),
 
                     const SizedBox(height: 36),
 
@@ -314,22 +408,23 @@ class _StudentLoginScreenState extends State<StudentLoginScreen> {
 
   Widget _buildAvatar(Size size) {
     return Container(
-      width: 90,
-      height: 90,
-      decoration: BoxDecoration(
-        shape: BoxShape.circle,
-        gradient: AppGradients.blueGradient,
-        boxShadow: [
-          BoxShadow(
-            color: AppColors.lightBlue.withValues(alpha: 0.45),
-            blurRadius: 28,
-            spreadRadius: 2,
-            offset: const Offset(0, 8),
+          width: 120,
+          height: 120,
+          decoration: BoxDecoration(
+            color: Colors.white,
+            shape: BoxShape.circle,
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.15),
+                blurRadius: 20,
+                offset: const Offset(0, 8),
+              ),
+            ],
           ),
-        ],
-      ),
-      child: const Icon(Icons.school_rounded, size: 44, color: Colors.white),
-    )
+          child: ClipOval(
+            child: Image.asset('assets/images/logo.png', fit: BoxFit.contain),
+          ),
+        )
         .animate()
         .fadeIn(duration: 600.ms)
         .scale(begin: const Offset(0.6, 0.6), curve: Curves.easeOutBack);
@@ -347,20 +442,29 @@ class _StudentLoginScreenState extends State<StudentLoginScreen> {
             color: Colors.white.withValues(alpha: 0.08),
             borderRadius: BorderRadius.circular(24),
             border: Border.all(
-                color: Colors.white.withValues(alpha: 0.18), width: 1.5),
+              color: Colors.white.withValues(alpha: 0.18),
+              width: 1.5,
+            ),
           ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text('Welcome Back',
-                  style: GoogleFonts.poppins(
-                      fontSize: 22,
-                      fontWeight: FontWeight.w700,
-                      color: Colors.white)),
+              Text(
+                'Welcome Back',
+                style: GoogleFonts.poppins(
+                  fontSize: 22,
+                  fontWeight: FontWeight.w700,
+                  color: Colors.white,
+                ),
+              ),
               const SizedBox(height: 4),
-              Text('Sign in to your student account',
-                  style: GoogleFonts.poppins(
-                      fontSize: 12, color: AppColors.textSecondary)),
+              Text(
+                'Sign in to your student account',
+                style: GoogleFonts.poppins(
+                  fontSize: 12,
+                  color: AppColors.textSecondary,
+                ),
+              ),
               const SizedBox(height: 28),
 
               // Email field
@@ -396,11 +500,14 @@ class _StudentLoginScreenState extends State<StudentLoginScreen> {
                 alignment: Alignment.centerRight,
                 child: GestureDetector(
                   onTap: _showForgotPassword,
-                  child: Text('Forgot Password?',
-                      style: GoogleFonts.poppins(
-                          fontSize: 12,
-                          color: AppColors.lightBlue,
-                          fontWeight: FontWeight.w500)),
+                  child: Text(
+                    'Forgot Password?',
+                    style: GoogleFonts.poppins(
+                      fontSize: 12,
+                      color: AppColors.lightBlue,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
                 ),
               ),
               const SizedBox(height: 28),
@@ -426,8 +533,10 @@ class _StudentLoginScreenState extends State<StudentLoginScreen> {
       decoration: BoxDecoration(
         color: Colors.white.withValues(alpha: 0.07),
         borderRadius: BorderRadius.circular(14),
-        border:
-            Border.all(color: Colors.white.withValues(alpha: 0.15), width: 1),
+        border: Border.all(
+          color: Colors.white.withValues(alpha: 0.15),
+          width: 1,
+        ),
       ),
       child: TextField(
         controller: controller,
@@ -436,13 +545,17 @@ class _StudentLoginScreenState extends State<StudentLoginScreen> {
         style: GoogleFonts.poppins(color: Colors.white, fontSize: 14),
         decoration: InputDecoration(
           labelText: label,
-          labelStyle:
-              GoogleFonts.poppins(color: AppColors.textSecondary, fontSize: 13),
+          labelStyle: GoogleFonts.poppins(
+            color: AppColors.textSecondary,
+            fontSize: 13,
+          ),
           prefixIcon: Icon(icon, color: AppColors.textSecondary, size: 20),
           suffixIcon: suffix,
           border: InputBorder.none,
-          contentPadding:
-              const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+          contentPadding: const EdgeInsets.symmetric(
+            horizontal: 16,
+            vertical: 16,
+          ),
         ),
       ),
     );
@@ -470,26 +583,35 @@ class _StudentLoginScreenState extends State<StudentLoginScreen> {
             backgroundColor: Colors.transparent,
             shadowColor: Colors.transparent,
             shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(16)),
+              borderRadius: BorderRadius.circular(16),
+            ),
           ),
           child: _loading
               ? const SizedBox(
                   width: 22,
                   height: 22,
                   child: CircularProgressIndicator(
-                      strokeWidth: 2.5, color: Colors.white),
+                    strokeWidth: 2.5,
+                    color: Colors.white,
+                  ),
                 )
               : Row(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
-                    Text('Sign In',
-                        style: GoogleFonts.poppins(
-                            fontSize: 16,
-                            fontWeight: FontWeight.w600,
-                            color: Colors.white)),
+                    Text(
+                      'Sign In',
+                      style: GoogleFonts.poppins(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w600,
+                        color: Colors.white,
+                      ),
+                    ),
                     const SizedBox(width: 8),
-                    const Icon(Icons.arrow_forward_rounded,
-                        color: Colors.white, size: 20),
+                    const Icon(
+                      Icons.arrow_forward_rounded,
+                      color: Colors.white,
+                      size: 20,
+                    ),
                   ],
                 ),
         ),

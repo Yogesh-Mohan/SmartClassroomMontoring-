@@ -261,6 +261,7 @@ class _AdminShellState extends State<AdminShell> {
   }
 
   Widget _buildNav() {
+    final bottomInset = MediaQuery.of(context).viewPadding.bottom;
     return Container(
       decoration: BoxDecoration(
         color: const Color(0xFF050520),
@@ -271,7 +272,10 @@ class _AdminShellState extends State<AdminShell> {
           BoxShadow(color: Colors.black.withValues(alpha: 0.4), blurRadius: 12),
         ],
       ),
-      padding: const EdgeInsets.only(bottom: 6, top: 6),
+      padding: EdgeInsets.only(
+        bottom: (bottomInset > 0 ? bottomInset : 6) + 6,
+        top: 6,
+      ),
       child: Row(
         children: List.generate(_navItems.length, (i) {
           final item = _navItems[i];

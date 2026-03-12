@@ -3,6 +3,7 @@
 import android.app.*
 import android.app.usage.UsageEvents
 import android.app.usage.UsageStatsManager
+import android.content.pm.ApplicationInfo
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
@@ -21,7 +22,8 @@ class MonitoringService : Service() {
         const val CHANNEL_SERVICE         = "smart_monitor_service"
         const val CHANNEL_VIOLATION       = "smart_monitor_violation"
         const val VIOLATION_THRESHOLD     = 20
-        const val VIOLATION_REPEAT_INTERVAL_MS = 2 * 60 * 1000L
+        const val ACTIVE_CHECK_INTERVAL_MS = 1_000L
+        const val PASSIVE_CHECK_INTERVAL_MS = 10_000L
 
         @Volatile var isRunning = false
 
@@ -32,6 +34,13 @@ class MonitoringService : Service() {
          * Default false: monitoring does NOT run until Dart confirms a class period.
          */
         @Volatile var monitoringActive = false
+
+        /**
+         * Admin master switch — set by admin from the Live Monitoring screen.
+         * When false → NO timer counting, NO violations, even during class time.
+         * Default true: monitoring is ON by default when class starts.
+         */
+        @Volatile var adminMonitoringEnabled = true
 
         /** Epoch millis of the last updateTimetableStatus call from Dart. */
         @Volatile var lastTimetablePushMs = 0L
@@ -92,107 +101,81 @@ class MonitoringService : Service() {
     private var violationCounter  = 0
     private var graceActive       = true
     private var lastDetectedApp   = "__init__"
-    private var lastMonitorActive = false   // tracks previous monitoringActive state
-    private var tickCount         = 0
-    private var violationActive   = false
-    private var lastNotificationTimeMs = 0L
+    private var currentMode       = "sleep" // sleep | passive | active
 
-    private fun resetViolationState() {
-        violationActive = false
-        lastNotificationTimeMs = 0L
+    private fun resetSession() {
+        elapsedSeconds = 0
+        lastDetectedApp = "__init__"
+        timerRunning = false
     }
 
     //  1-second tick loop 
     private val tickRunnable = object : Runnable {
         override fun run() {
-            tickCount++
+            val timetableOn = monitoringActive
+            val monitoringAllowed = timetableOn && adminMonitoringEnabled
 
             if (!isScreenOn) {
-                timerHandler.postDelayed(this, 1_000)
+                currentMode = "sleep"
+                resetSession()
+                refreshServiceNotification("Smart Classroom", "Screen OFF - monitoring sleep mode")
+                sendLiveUpdateToFlutter("", 0, timetableOn, currentMode)
+                timerHandler.postDelayed(this, PASSIVE_CHECK_INTERVAL_MS)
                 return
             }
 
-            val currentApp    = getCurrentForegroundApp()
-            val isBlocked     = isBlockedApp(currentApp)
-            val timetableOn   = monitoringActive
-            val appChanged    = currentApp != lastDetectedApp
-            val timetableFlip = timetableOn != lastMonitorActive
-            val periodicRefresh = tickCount % 10 == 0  // refresh every 10s
+            val currentApp = getCurrentForegroundApp()
+            val interactiveApp = isBlockedApp(currentApp)
+            val systemApp = isSystemApp(currentApp)
+            val nextMode = if (monitoringAllowed && interactiveApp) "active" else "passive"
+            val appChanged = currentApp != lastDetectedApp
 
-            // Handle app switch or timetable state flip (or periodic refresh)
-            if (appChanged || timetableFlip || periodicRefresh) {
+            if (nextMode != currentMode) {
+                currentMode = nextMode
+                if (currentMode != "active") {
+                    resetSession()
+                }
+            }
+
+            if (currentMode == "active") {
                 if (appChanged) {
                     lastDetectedApp = currentApp
-                    elapsedSeconds  = 0
+                    elapsedSeconds = 0
                 }
-                lastMonitorActive = timetableOn
-
-                when {
-                    // Class in session + blocked app in foreground -> start/resume timer
-                    isBlocked && timetableOn -> {
-                        timerRunning = true
-                        refreshServiceNotification(
-                            "\uD83D\uDD35 Class Time — Monitoring ON",
-                            "Monitoring: ${elapsedSeconds}s / 20s"
-                        )
-                    }
-                    // Blocked app but outside class period -> break time gate
-                    isBlocked && !timetableOn -> {
-                        timerRunning   = false
-                        elapsedSeconds = 0
-                        resetViolationState()
-                        refreshServiceNotification(
-                            "\uD83D\uDFE0 Break Time",
-                            "Monitoring is OFF during break"
-                        )
-                    }
-                    // Non-blocked (system/study) app -> always pause
-                    else -> {
-                        timerRunning   = false
-                        elapsedSeconds = 0
-                        resetViolationState()
-                        val body = if (timetableOn)
-                            "Class time — studying detected"
-                        else
-                            "Break time — monitoring OFF"
-                        refreshServiceNotification(
-                            if (timetableOn) "\uD83D\uDD35 Class Time" else "\uD83D\uDFE0 Break Time",
-                            body
-                        )
-                    }
-                }
-            }
-
-            // Count seconds: ALL THREE must be true
-            if (timerRunning && isBlocked && timetableOn) {
+                timerRunning = true
                 elapsedSeconds++
-                refreshServiceNotification(
-                    "\uD83D\uDD35 Class Time — Monitoring ON",
-                    "${elapsedSeconds}s / ${VIOLATION_THRESHOLD}s on restricted app"
-                )
-                if (elapsedSeconds >= VIOLATION_THRESHOLD) {
-                    val nowMs = System.currentTimeMillis()
-                    val shouldNotify =
-                        !violationActive ||
-                            (nowMs - lastNotificationTimeMs >= VIOLATION_REPEAT_INTERVAL_MS)
 
-                    if (shouldNotify) {
-                        fireViolationNotification(elapsedSeconds)
-                        violationActive = true
-                        lastNotificationTimeMs = nowMs
-                    }
+                refreshServiceNotification(
+                    "\uD83D\uDD35 Class Time — Active Monitoring",
+                    "${elapsedSeconds}s / ${VIOLATION_THRESHOLD}s on ${friendlyAppName(currentApp)}"
+                )
+
+                if (elapsedSeconds > VIOLATION_THRESHOLD) {
+                    fireViolationNotification(elapsedSeconds)
+                    // Requirement: reset timer once violation is detected.
+                    elapsedSeconds = 0
                 }
-            } else {
-                // Once student returns to compliant state, next violation should trigger immediately.
-                resetViolationState()
+
+                sendLiveUpdateToFlutter(currentApp, elapsedSeconds, timetableOn, currentMode)
+                timerHandler.postDelayed(this, ACTIVE_CHECK_INTERVAL_MS)
+                return
             }
 
-            // Push live update to Flutter every tick for real-time monitoring
-            // Only send the real screenTime when the timer is ACTIVELY running
-            val reportedScreenTime = if (timerRunning && isBlocked && timetableOn) elapsedSeconds else 0
-            sendLiveUpdateToFlutter(currentApp, reportedScreenTime, timetableOn)
+            // Passive mode: non-interactive app, system app, break-time, or admin pause.
+            timerRunning = false
+            elapsedSeconds = 0
+            lastDetectedApp = currentApp
 
-            timerHandler.postDelayed(this, 1_000)
+            val passiveText = when {
+                !monitoringAllowed -> "Monitoring paused (break/admin)"
+                systemApp -> "System app detected: ${friendlyAppName(currentApp)}"
+                currentApp.isNotEmpty() -> "Passive app detected: ${friendlyAppName(currentApp)}"
+                else -> "Passive mode"
+            }
+
+            refreshServiceNotification("\uD83D\uDFE1 Passive Monitoring", passiveText)
+            sendLiveUpdateToFlutter(currentApp, 0, timetableOn, currentMode)
+            timerHandler.postDelayed(this, PASSIVE_CHECK_INTERVAL_MS)
         }
     }
 
@@ -203,19 +186,14 @@ class MonitoringService : Service() {
                 Intent.ACTION_SCREEN_ON,
                 Intent.ACTION_USER_PRESENT -> {
                     isScreenOn      = true
-                    elapsedSeconds  = 0
-                    lastDetectedApp = "__init__"
-                    timerRunning    = false
-                    resetViolationState()
+                    resetSession()
                     refreshServiceNotification("Smart Classroom", "Screen ON - detecting app...")
                 }
                 Intent.ACTION_SCREEN_OFF -> {
                     if (graceActive) return
                     isScreenOn      = false
-                    timerRunning    = false
-                    elapsedSeconds  = 0
-                    lastDetectedApp = "__init__"
-                    resetViolationState()
+                    currentMode = "sleep"
+                    resetSession()
                     refreshServiceNotification("Smart Classroom", "Screen OFF - monitoring paused")
                 }
             }
@@ -247,6 +225,33 @@ class MonitoringService : Service() {
     private fun isBlockedApp(pkg: String): Boolean {
         if (pkg.isEmpty()) return false  // unknown app = safe, do NOT count
         return pkg in BLOCKED_APPS
+    }
+
+    private fun isSystemApp(pkg: String): Boolean {
+        if (pkg.isEmpty()) return false
+        if (pkg == "android" || pkg == "com.android.systemui" || pkg.startsWith("com.android.")) {
+            return true
+        }
+        return try {
+            val appInfo = packageManager.getApplicationInfo(pkg, 0)
+            (appInfo.flags and ApplicationInfo.FLAG_SYSTEM) != 0 ||
+                (appInfo.flags and ApplicationInfo.FLAG_UPDATED_SYSTEM_APP) != 0
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    private fun friendlyAppName(pkg: String): String {
+        if (pkg.isBlank()) return "Unknown"
+        return when (pkg) {
+            "com.whatsapp" -> "WhatsApp"
+            "com.instagram.android" -> "Instagram"
+            "com.android.chrome" -> "Chrome"
+            "com.google.android.youtube" -> "YouTube"
+            "com.android.settings" -> "Settings"
+            "com.android.systemui" -> "System UI"
+            else -> pkg.substringAfterLast('.')
+        }
     }
 
     //  Lifecycle 
@@ -311,7 +316,7 @@ class MonitoringService : Service() {
         nm.notify(
             2000 + violationCounter,
             NotificationCompat.Builder(this, CHANNEL_VIOLATION)
-                .setSmallIcon(R.mipmap.ic_launcher)
+                .setSmallIcon(R.mipmap.kr_launcher_new)
                 .setContentTitle("RULE BROKEN")
                 .setContentText("${secondsUsed}s of screen time exceeded! Put your phone down.")
                 .setPriority(NotificationCompat.PRIORITY_HIGH)
@@ -345,27 +350,24 @@ class MonitoringService : Service() {
      *   "idle"    → screen off, no interactive app, or break time
      *   "offline" → set by Flutter when the student logs out
      */
-    private fun sendLiveUpdateToFlutter(currentApp: String, screenTime: Int, monitoringOn: Boolean) {
+    private fun sendLiveUpdateToFlutter(currentApp: String, screenTime: Int, monitoringOn: Boolean, mode: String) {
         val channel = flutterChannel ?: return
-
-        // Determine if the timer is truly ticking right now
-        val timerTicking = timerRunning && isBlockedApp(currentApp) && monitoringOn
 
         val status = when {
             !isScreenOn  -> "idle"
-            timerTicking -> "active"      // phone in use during class
-            else         -> "idle"         // system app, break, or no app
+            mode == "active" -> "active"
+            else -> "idle"
         }
 
-        // Only report the app name when the timer is actually ticking
-        val reportedApp = if (timerTicking) currentApp else ""
+        val reportedApp = if (currentApp.isBlank()) "" else currentApp
 
         val args = mapOf(
             "currentApp"    to reportedApp,
             "screenTime"    to screenTime,
             "period"        to currentPeriod,
             "monitoringOn"  to monitoringOn,
-            "status"        to status
+            "status"        to status,
+            "mode"          to mode
         )
         android.os.Handler(android.os.Looper.getMainLooper()).post {
             channel.invokeMethod("onLiveUpdate", args)
@@ -395,7 +397,7 @@ class MonitoringService : Service() {
 
     private fun buildServiceNotification(title: String, text: String): Notification =
         NotificationCompat.Builder(this, CHANNEL_SERVICE)
-            .setSmallIcon(R.mipmap.ic_launcher)
+            .setSmallIcon(R.mipmap.kr_launcher_new)
             .setContentTitle(title)
             .setContentText(text)
             .setPriority(NotificationCompat.PRIORITY_LOW)

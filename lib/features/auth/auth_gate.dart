@@ -1,8 +1,10 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../../core/theme/app_gradients.dart';
+import '../../services/monitor_service.dart';
 import '../advisor/advisor_dashboard.dart';
 import '../admin/admin_shell.dart';
 import '../role_select/role_select_screen.dart';
@@ -22,6 +24,7 @@ class AuthGate extends StatefulWidget {
 
 class _AuthGateState extends State<AuthGate> {
   late final Future<Widget> _initialScreenFuture;
+  final ScreenMonitorService _monitorService = ScreenMonitorService();
 
   @override
   void initState() {
@@ -42,6 +45,11 @@ class _AuthGateState extends State<AuthGate> {
         final role = roleProfile['role'];
         final data = roleProfile['data'] as Map<String, dynamic>;
         if (role == 'student') {
+          final allowed = await _hasRequiredStudentPermissions();
+          if (!allowed) {
+            await FirebaseAuth.instance.signOut().catchError((_) {});
+            return const RoleSelectScreen();
+          }
           return StudentShell(studentData: data);
         }
         if (role == 'admin') {
@@ -65,6 +73,11 @@ class _AuthGateState extends State<AuthGate> {
 
       final studentData = await _fetchStudentProfile(email, user.uid);
       if (studentData != null) {
+        final allowed = await _hasRequiredStudentPermissions();
+        if (!allowed) {
+          await FirebaseAuth.instance.signOut().catchError((_) {});
+          return const RoleSelectScreen();
+        }
         return StudentShell(studentData: studentData);
       }
 
@@ -79,7 +92,9 @@ class _AuthGateState extends State<AuthGate> {
   }
 
   Future<Map<String, dynamic>?> _fetchAdminProfile(
-      String email, String uid) async {
+    String email,
+    String uid,
+  ) async {
     try {
       var snap = await FirebaseFirestore.instance
           .collection('admins')
@@ -104,7 +119,9 @@ class _AuthGateState extends State<AuthGate> {
   }
 
   Future<Map<String, dynamic>?> _fetchStudentProfile(
-      String email, String uid) async {
+    String email,
+    String uid,
+  ) async {
     try {
       var snap = await FirebaseFirestore.instance
           .collection('students')
@@ -129,14 +146,38 @@ class _AuthGateState extends State<AuthGate> {
 
   Future<Map<String, dynamic>?> _fetchUserRole(String uid) async {
     try {
-      final doc = await FirebaseFirestore.instance.collection('users').doc(uid).get();
+      final doc = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(uid)
+          .get();
       if (!doc.exists) return null;
       final data = doc.data() ?? {};
       final role = (data['role'] ?? '').toString().toLowerCase().trim();
       if (role.isEmpty) return null;
-      return {'role': role, 'data': {'id': uid, ...data}};
+      return {
+        'role': role,
+        'data': {'id': uid, ...data},
+      };
     } catch (_) {
       return null;
+    }
+  }
+
+  Future<bool> _hasRequiredStudentPermissions() async {
+    try {
+      final usageGranted = await _monitorService.hasUsagePermission();
+      if (!usageGranted) return false;
+
+      final notificationSettings =
+          await FirebaseMessaging.instance.getNotificationSettings();
+      final notificationGranted =
+          notificationSettings.authorizationStatus ==
+              AuthorizationStatus.authorized ||
+          notificationSettings.authorizationStatus ==
+              AuthorizationStatus.provisional;
+      return notificationGranted;
+    } catch (_) {
+      return false;
     }
   }
 
@@ -145,22 +186,46 @@ class _AuthGateState extends State<AuthGate> {
     return FutureBuilder<Widget>(
       future: _initialScreenFuture,
       builder: (context, snapshot) {
-        if (snapshot.connectionState == ConnectionState.done && snapshot.hasData) {
+        if (snapshot.connectionState == ConnectionState.done &&
+            snapshot.hasData) {
           return snapshot.data!;
         }
 
         // Splash / loading screen while resolving auth state
         return Scaffold(
           body: Container(
-            decoration:
-                const BoxDecoration(gradient: AppGradients.primaryVertical),
+            decoration: const BoxDecoration(
+              gradient: AppGradients.primaryVertical,
+            ),
             child: Center(
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
+                  Container(
+                    width: 120,
+                    height: 120,
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      shape: BoxShape.circle,
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withValues(alpha: 0.15),
+                          blurRadius: 20,
+                          offset: const Offset(0, 8),
+                        ),
+                      ],
+                    ),
+                    child: ClipOval(
+                      child: Image.asset(
+                        'assets/images/logo.png',
+                        fit: BoxFit.contain,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 30),
                   const CircularProgressIndicator(
                     color: Colors.white,
-                    strokeWidth: 2.5,
+                    strokeWidth: 2,
                   ),
                   const SizedBox(height: 20),
                   Text(
