@@ -390,9 +390,17 @@ class _LiveMonitoringScreenState extends State<LiveMonitoringScreen> {
 
       // Tick timer only when the student is truly in interactive phone use.
       if (interactive && firestoreTime > 0) {
-        _lastFirestoreScreenTime[uid] = firestoreTime;
-        _lastFirestoreUpdate[uid] = DateTime.now();
-        _localTimers[uid] = firestoreTime;
+        final lastBase = _lastFirestoreScreenTime[uid];
+
+        // Only reset local timer anchor when Firestore value actually changes.
+        // Otherwise keep counting locally each second until the next backend update.
+        if (lastBase == null || firestoreTime != lastBase) {
+          _lastFirestoreScreenTime[uid] = firestoreTime;
+          _lastFirestoreUpdate[uid] = DateTime.now();
+          _localTimers[uid] = firestoreTime;
+        } else {
+          _localTimers.putIfAbsent(uid, () => firestoreTime);
+        }
       } else {
         _localTimers[uid] = 0;
         _lastFirestoreScreenTime[uid] = 0;

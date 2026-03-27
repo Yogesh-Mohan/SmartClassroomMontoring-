@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
@@ -6,9 +8,11 @@ import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_gradients.dart';
 import '../../services/attendance_service.dart';
 import '../../services/monitor_service.dart';
+import '../../services/session_state_service.dart';
 import '../../services/timetable_monitor.dart';
 import '../auth/student_auth_service.dart';
 import '../role_select/role_select_screen.dart';
+import 'attendance/student_attendance_screen.dart';
 import 'home/student_home_screen.dart';
 import 'credits/credits_screen.dart';
 import 'timetable/timetable_screen.dart';
@@ -23,21 +27,25 @@ class StudentShell extends StatefulWidget {
   State<StudentShell> createState() => _StudentShellState();
 }
 
-class _StudentShellState extends State<StudentShell> {
+class _StudentShellState extends State<StudentShell>
+    with WidgetsBindingObserver {
   int _currentIndex = 0;
 
   late final List<Widget> _pages;
   final ScreenMonitorService _monitorService = ScreenMonitorService();
   final TimetableMonitor _timetableMonitor = TimetableMonitor();
+  Timer? _sessionHeartbeatTimer;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     final classCandidates = _buildClassCandidates();
     final studentLookupKeys = _buildStudentLookupKeys();
     final studentUID = _resolveStudentUid();
     _pages = [
       StudentHomeScreen(studentData: widget.studentData),
+      StudentAttendanceScreen(studentData: widget.studentData),
       CreditsScreen(studentData: widget.studentData),
       TimetableScreen(studentData: widget.studentData),
       AlertsScreen(
@@ -50,6 +58,25 @@ class _StudentShellState extends State<StudentShell> {
 
     // Start screen monitoring for this student
     _initializeMonitoring();
+    _startSessionHeartbeat();
+  }
+
+  void _startSessionHeartbeat() {
+    // Keep loginState=1 alive while app is active, even after reload/resume.
+    SessionStateService.instance.safeHeartbeat(source: 'student_shell_init');
+    _sessionHeartbeatTimer?.cancel();
+    _sessionHeartbeatTimer = Timer.periodic(const Duration(seconds: 45), (_) {
+      SessionStateService.instance.safeHeartbeat(
+        source: 'student_shell_periodic',
+      );
+    });
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      SessionStateService.instance.safeHeartbeat(source: 'student_shell_resumed');
+    }
   }
 
   Future<void> _initializeMonitoring() async {
@@ -197,6 +224,8 @@ class _StudentShellState extends State<StudentShell> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _sessionHeartbeatTimer?.cancel();
     // Stop timetable monitor first, then the native service
     _timetableMonitor.stop();
     _monitorService.stopMonitoring();
@@ -205,6 +234,11 @@ class _StudentShellState extends State<StudentShell> {
 
   static const _navItems = [
     _NavItem(Icons.home_rounded, Icons.home_outlined, 'Home'),
+    _NavItem(
+      Icons.fact_check_rounded,
+      Icons.fact_check_outlined,
+      'Attendance',
+    ),
     _NavItem(
       Icons.workspace_premium_rounded,
       Icons.workspace_premium_outlined,

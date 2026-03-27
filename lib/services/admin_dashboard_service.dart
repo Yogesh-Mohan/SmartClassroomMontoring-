@@ -67,6 +67,10 @@ class AdminDashboardService {
     return _db.collection('attendance').where('date', isEqualTo: _todayDateKey());
   }
 
+  Query<Map<String, dynamic>> _activeSessionsQuery() {
+    return _db.collection('student_sessions').where('loginState', isEqualTo: 1);
+  }
+
 
   String _displayName(Map<String, dynamic> data) {
     return (data['name'] ?? data['studentName'] ?? 'Unknown').toString().trim();
@@ -108,6 +112,13 @@ class AdminDashboardService {
           return normalizedDocId;
         }
 
+  String _sessionUid(String docId, Map<String, dynamic> row) {
+    final direct = (row['uid'] ?? row['studentUID'] ?? row['studentUid'] ?? '')
+        .toString()
+        .trim();
+    return direct.isNotEmpty ? direct : docId.trim();
+  }
+
   Stream<List<AdminStudentRow>> streamTotalStudentsList() {
     return _db.collection('students').snapshots().map((snap) {
       final rows = snap.docs
@@ -130,10 +141,12 @@ class AdminDashboardService {
   Stream<List<AdminStudentRow>> streamPresentTodayList() {
     final attendanceTrigger = _todayAttendanceQuery().snapshots().map((_) {});
     final studentTrigger = _db.collection('students').snapshots().map((_) {});
+    final sessionTrigger = _activeSessionsQuery().snapshots().map((_) {});
 
-    return StreamGroup.merge([attendanceTrigger, studentTrigger]).asyncMap((_) async {
+    return StreamGroup.merge([attendanceTrigger, studentTrigger, sessionTrigger]).asyncMap((_) async {
       final attendanceSnap = await _todayAttendanceQuery().get();
       final studentsSnap = await _db.collection('students').get();
+      final sessionSnap = await _activeSessionsQuery().get();
 
       // Build student profile lookup by UID
       final studentByUid = <String, Map<String, dynamic>>{};
@@ -144,6 +157,21 @@ class AdminDashboardService {
       }
 
       final unique = <String, AdminStudentRow>{};
+
+      // Explicit logged-in sessions are always considered present.
+      for (final doc in sessionSnap.docs) {
+        final row = doc.data();
+        final uid = _sessionUid(doc.id, row);
+        if (uid.isEmpty) continue;
+        final profile = studentByUid[uid] ?? row;
+        unique[uid] = AdminStudentRow(
+          uid: uid,
+          name: _displayName(profile),
+          regNo: _displayRegNo(profile),
+          classLabel: _displayClass(profile),
+        );
+      }
+
       for (final doc in attendanceSnap.docs) {
         final row = doc.data();
         // Only include students who are currently inside (no logoutTime yet)
@@ -169,16 +197,23 @@ class AdminDashboardService {
   Stream<List<AdminStudentRow>> streamNotLoggedInTodayList() {
     final studentTrigger = _db.collection('students').snapshots().map((_) {});
     final attendanceTrigger = _todayAttendanceQuery().snapshots().map((_) {});
+    final sessionTrigger = _activeSessionsQuery().snapshots().map((_) {});
 
-    return StreamGroup.merge([studentTrigger, attendanceTrigger]).asyncMap((_) async {
+    return StreamGroup.merge([studentTrigger, attendanceTrigger, sessionTrigger]).asyncMap((_) async {
       final studentsSnap = await _db.collection('students').get();
       final attendanceSnap = await _todayAttendanceQuery().get();
+      final sessionSnap = await _activeSessionsQuery().get();
 
       final loggedUids = <String>{};
       for (final doc in attendanceSnap.docs) {
         // Only treat as "currently present" if they haven't logged out yet
         if (doc.data()['logoutTime'] != null) continue;
         final uid = _attendanceUid(doc.id, doc.data());
+        if (uid.isNotEmpty) loggedUids.add(uid);
+      }
+
+      for (final doc in sessionSnap.docs) {
+        final uid = _sessionUid(doc.id, doc.data());
         if (uid.isNotEmpty) loggedUids.add(uid);
       }
 

@@ -89,6 +89,47 @@ class MonitoringService : Service() {
             "com.UCMobile.intl", "com.duckduckgo.mobile.android",
             "com.kiwibrowser.browser", "com.uc.browser.en"
         )
+
+        // Prefix-based fallback so app variants / lite editions are also captured.
+        val BLOCKED_APP_PREFIXES: Set<String> = setOf(
+            "com.instagram",
+            "com.facebook",
+            "com.twitter",
+            "com.x.",
+            "com.snapchat",
+            "com.whatsapp",
+            "org.telegram",
+            "com.zhiliaoapp",
+            "com.ss.android.ugc",
+            "com.reddit",
+            "com.discord",
+            "com.google.android.youtube",
+            "com.netflix",
+            "com.amazon.avod",
+            "in.startv.hotstar",
+            "com.disney",
+            "tv.twitch",
+            "com.zee5",
+            "com.voot",
+            "com.jio",
+            "com.mxtech",
+            "com.supercell",
+            "com.king.",
+            "com.activision",
+            "com.garena",
+            "com.pubg",
+            "com.tencent.ig",
+            "com.roblox",
+            "com.mojang",
+            "com.miniclip",
+            "com.android.chrome",
+            "org.mozilla",
+            "com.opera",
+            "com.microsoft.emmx",
+            "com.brave",
+            "com.UCMobile",
+            "com.uc."
+        )
     }
 
     private lateinit var timerThread: HandlerThread
@@ -224,7 +265,8 @@ class MonitoringService : Service() {
 
     private fun isBlockedApp(pkg: String): Boolean {
         if (pkg.isEmpty()) return false  // unknown app = safe, do NOT count
-        return pkg in BLOCKED_APPS
+        if (pkg in BLOCKED_APPS) return true
+        return BLOCKED_APP_PREFIXES.any { prefix -> pkg.startsWith(prefix) }
     }
 
     private fun isSystemApp(pkg: String): Boolean {

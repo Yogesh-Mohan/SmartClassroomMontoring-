@@ -40,7 +40,7 @@ class _StudentLoginScreenState extends State<StudentLoginScreen> {
       final usageGranted = await _monitorService.hasUsagePermission();
 
       if (!notificationGranted || !usageGranted) {
-        await StudentAuthService.signOut();
+        await StudentAuthService.signOut(explicit: false);
         if (!mounted) return;
         setState(() => _loading = false);
         _showPermissionsRequiredDialog(

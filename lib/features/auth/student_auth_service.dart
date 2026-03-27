@@ -1,12 +1,18 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import '../../services/session_state_service.dart';
 
 class StudentAuthService {
   static final FirebaseFirestore _firestore = FirebaseFirestore.instance;
   static final FirebaseAuth _auth = FirebaseAuth.instance;
 
   /// Sign out the current student
-  static Future<void> signOut() async {
+  static Future<void> signOut({bool explicit = true}) async {
+    if (explicit) {
+      try {
+        await SessionStateService.instance.markLoggedOut();
+      } catch (_) {}
+    }
     await _auth.signOut();
   }
 
@@ -38,7 +44,14 @@ class StudentAuthService {
     }
 
     // ── Step 3: fetch Firestore profile ────────────────────────────────────
-    return _fetchProfile(normalizedEmail, credential.user!.uid);
+    final profile = await _fetchProfile(normalizedEmail, credential.user!.uid);
+    try {
+      await SessionStateService.instance.markLoggedIn(
+        studentData: profile,
+        source: 'student_auth_signin',
+      );
+    } catch (_) {}
+    return profile;
   }
 
   /// First-time migration: verify password from Firestore, then create a

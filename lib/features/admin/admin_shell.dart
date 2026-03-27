@@ -8,6 +8,7 @@ import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_gradients.dart';
 import '../../services/notification_service.dart';
 import '../advisor/pending_certificates_screen.dart';
+import 'attendance/admin_attendance_screen.dart';
 import 'home/admin_home_screen.dart';
 import 'monitoring/live_monitoring_screen.dart';
 import 'notification/notification_screen.dart';
@@ -36,6 +37,7 @@ class _AdminShellState extends State<AdminShell> {
     super.initState();
     _pages = [
       AdminHomeScreen(adminData: widget.adminData),
+      const AdminAttendanceScreen(),
       PendingCertificatesScreen(advisorData: widget.adminData),
       const LiveMonitoringScreen(),
       const AdminViolationsScreen(),
@@ -230,6 +232,11 @@ class _AdminShellState extends State<AdminShell> {
 
   static const _navItems = [
     _NavItem(Icons.dashboard_rounded, Icons.dashboard_outlined, 'Dashboard'),
+    _NavItem(
+      Icons.how_to_reg_rounded,
+      Icons.how_to_reg_outlined,
+      'Attendance',
+    ),
     _NavItem(Icons.insights_rounded, Icons.insights_outlined, 'Insights'),
     _NavItem(
       Icons.monitor_heart_rounded,

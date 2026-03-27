@@ -29,7 +29,9 @@ class LiveMonitoringService {
   Timer? _timer;
   bool _running = false;
   DateTime? _lastPushAt;
+  DateTime? _lastRealtimeSyncAt;
   Map<String, Object?>? _lastPushedState;
+  static const Duration realtimeSyncMinGap = Duration(seconds: 4);
 
   // Student identity
   String _studentUID = '';
@@ -64,6 +66,7 @@ class LiveMonitoringService {
     _regNo = regNo;
     _running = true;
     _status = 'active';
+    _lastRealtimeSyncAt = null;
     debugPrint('[LiveMonitor] Starting for $_studentName ($_studentUID)');
 
     // Listen to admin master switch changes in real-time
@@ -80,6 +83,7 @@ class LiveMonitoringService {
     _timer = null;
     _running = false;
     _status = 'offline';
+    _lastRealtimeSyncAt = null;
     _adminSettingsListener?.cancel();
     _adminSettingsListener = null;
     await _pushToFirestore(force: true);
@@ -141,11 +145,22 @@ class LiveMonitoringService {
       // App changed → reset violation flag for the new usage session
       _violationSentThisSession = false;
       _screenTime = 0;
+      _requestRealtimeSync(force: true);
     }
   }
 
   void updateScreenTime(int seconds) {
     _screenTime = seconds;
+
+    // Push immediately when active usage starts so admin sees 1s, 2s, 3s live.
+    if (_status == 'active' && seconds <= 1) {
+      _requestRealtimeSync(force: true);
+    }
+
+    // While active, refresh backend every 15s to keep admin status accurate.
+    if (_status == 'active' && seconds > 0 && seconds % 15 == 0) {
+      _requestRealtimeSync();
+    }
   }
 
   void updateCurrentPeriod(String period) {
@@ -153,11 +168,15 @@ class LiveMonitoringService {
   }
 
   void updateStatus(String status) {
+    if (_status == status) return;
     _status = status;
+    _requestRealtimeSync(force: true);
   }
 
   void updateMode(String mode) {
+    if (_mode == mode) return;
     _mode = mode;
+    _requestRealtimeSync(force: true);
   }
 
   /// Returns true if a violation has already been recorded for this session.
@@ -174,6 +193,19 @@ class LiveMonitoringService {
   }
 
   bool get isRunning => _running;
+
+  void _requestRealtimeSync({bool force = false}) {
+    if (!_running || _studentUID.isEmpty) return;
+    final now = DateTime.now();
+
+    if (!force && _lastRealtimeSyncAt != null) {
+      final diff = now.difference(_lastRealtimeSyncAt!);
+      if (diff < realtimeSyncMinGap) return;
+    }
+
+    _lastRealtimeSyncAt = now;
+    unawaited(_pushToFirestore(force: true));
+  }
 
   // ── Firestore push ────────────────────────────────────────────────────────
 

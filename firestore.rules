@@ -120,6 +120,47 @@ service cloud.firestore {
       allow delete: if false;
     }
 
+    // ── SMART ATTENDANCE SESSIONS ───────────────────────────────────────────
+    match /attendance_sessions/{docId} {
+      allow read: if request.auth != null;
+      allow create, update: if request.auth != null && isAdmin();
+      allow delete: if false;
+    }
+
+    // ── SMART ATTENDANCE RECORDS ───────────────────────────────────────────
+    match /attendance_records/{docId} {
+      // Non-existing doc reads are used by duplicate-check flow before create.
+      allow read: if request.auth != null
+                  && (
+                    isAdmin()
+                    || !exists(/databases/$(database)/documents/attendance_records/$(docId))
+                    || resource.data.studentUID == request.auth.uid
+                  );
+
+      allow create: if request.auth != null
+                    && request.resource.data.studentUID == request.auth.uid
+                    && request.resource.data.status == 'present'
+                    && request.resource.data.manual == false;
+
+      allow update: if request.auth != null
+                    && (
+                      isAdmin()
+                      || (
+                        resource.data.studentUID == request.auth.uid
+                        && request.resource.data.studentUID == request.auth.uid
+                        && request.resource.data.status == resource.data.status
+                        && request.resource.data.manual == resource.data.manual
+                      )
+                    );
+      allow delete: if false;
+    }
+
+    // ── CLASSROOM GEOFENCES ─────────────────────────────────────────────────
+    match /classroom_geofences/{docId} {
+      allow read: if request.auth != null;
+      allow create, update, delete: if isAdmin();
+    }
+
     // ── LOGOUT ATTEMPTS ───────────────────────────────────────────────────────
     // Any authenticated user (student) can create early-logout attempt records.
     // Admin can read all logout_attempts docs.
