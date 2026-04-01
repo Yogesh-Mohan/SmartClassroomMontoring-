@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 
@@ -118,16 +119,24 @@ class _AdminAttendanceScreenState extends State<AdminAttendanceScreen> {
 
       setState(() {
         _session = session;
-        _feedback = 'Attendance code ready';
+        _feedback = session.isClosed
+            ? '${session.period} attendance closed'
+            : 'Attendance code ready';
         _syncTimer();
       });
     } on AttendanceError catch (e) {
       setState(() {
         _feedback = e.message;
       });
-    } catch (_) {
+    } on FirebaseException catch (e) {
       setState(() {
-        _feedback = 'Failed to start attendance session';
+        _feedback = e.code == 'permission-denied'
+            ? 'Firestore permission denied. Ensure your admin account exists in the admins collection.'
+            : 'Firestore error: ${e.message ?? e.code}';
+      });
+    } catch (e) {
+      setState(() {
+        _feedback = 'Failed to start attendance session: $e';
       });
     } finally {
       if (mounted) {
@@ -186,6 +195,10 @@ class _AdminAttendanceScreenState extends State<AdminAttendanceScreen> {
   Widget build(BuildContext context) {
     final session = _session;
     final currentPeriod = _selectedPeriod;
+    final periodClosed = session?.isClosed == true;
+    final currentPeriodLabel = periodClosed && currentPeriod != null
+        ? '$currentPeriod (Attendance Closed)'
+        : (currentPeriod ?? 'No active class period');
 
     return SafeArea(
       child: SingleChildScrollView(
@@ -248,7 +261,7 @@ class _AdminAttendanceScreenState extends State<AdminAttendanceScreen> {
                               const SizedBox(width: 8),
                               Expanded(
                                 child: Text(
-                                  currentPeriod ?? 'No active class period',
+                                  currentPeriodLabel,
                                   style: GoogleFonts.poppins(
                                     color: Colors.white,
                                     fontWeight: FontWeight.w600,
@@ -278,6 +291,7 @@ class _AdminAttendanceScreenState extends State<AdminAttendanceScreen> {
                         ),
                       ),
                       onPressed: (_loading || _periodLoading || currentPeriod == null)
+                          || periodClosed
                           ? null
                           : _startAttendance,
                       child: Row(
@@ -285,7 +299,11 @@ class _AdminAttendanceScreenState extends State<AdminAttendanceScreen> {
                         children: [
                           const Icon(Icons.check_circle_rounded, size: 20),
                           const SizedBox(width: 8),
-                          Text(_loading ? 'Starting...' : 'Start Attendance'),
+                          Text(
+                            periodClosed
+                                ? 'Attendance Closed'
+                                : (_loading ? 'Starting...' : 'Start Attendance'),
+                          ),
                         ],
                       ),
                     ),
@@ -327,10 +345,14 @@ class _AdminAttendanceScreenState extends State<AdminAttendanceScreen> {
                   Expanded(
                     child: _MetricTile(
                       title: 'Status',
-                      value: session?.isActive == true ? 'ACTIVE' : 'EXPIRED',
-                      valueColor: session?.isActive == true
-                          ? AppColors.success
-                          : AppColors.danger,
+                      value: periodClosed
+                          ? 'CLOSED'
+                          : (session?.isActive == true ? 'ACTIVE' : 'EXPIRED'),
+                      valueColor: periodClosed
+                          ? AppColors.warning
+                          : (session?.isActive == true
+                                ? AppColors.success
+                                : AppColors.danger),
                     ),
                   ),
                 ],
@@ -387,17 +409,98 @@ class _MetricTile extends StatelessWidget {
   }
 }
 
-class _LiveAttendancePanel extends StatelessWidget {
+class _LiveAttendancePanel extends StatefulWidget {
   final String period;
   final SmartAttendanceService service;
 
   const _LiveAttendancePanel({required this.period, required this.service});
 
   @override
+  State<_LiveAttendancePanel> createState() => _LiveAttendancePanelState();
+}
+
+class _LiveAttendancePanelState extends State<_LiveAttendancePanel> {
+  final Map<String, String> _draftStatusByUid = <String, String>{};
+  bool _submitting = false;
+
+  String _effectiveStatus(StudentAttendanceView row) {
+    return _draftStatusByUid[row.uid] ?? row.status;
+  }
+
+  void _stageStatus(StudentAttendanceView row, String nextStatus) {
+    if (_submitting) return;
+    setState(() {
+      if (row.status == nextStatus) {
+        _draftStatusByUid.remove(row.uid);
+      } else {
+        _draftStatusByUid[row.uid] = nextStatus;
+      }
+    });
+  }
+
+  Future<void> _submitAttendance(List<StudentAttendanceView> rows) async {
+    if (_submitting) return;
+
+    final changed = <String, String>{};
+    final names = <String, String>{};
+
+    for (final row in rows) {
+      final drafted = _draftStatusByUid[row.uid];
+      if (drafted == null || drafted == row.status) continue;
+      changed[row.uid] = drafted;
+      names[row.uid] = row.name;
+    }
+
+    setState(() => _submitting = true);
+    try {
+      if (changed.isNotEmpty) {
+        await widget.service.manualOverrideBatch(
+          period: widget.period,
+          statusByStudentUid: changed,
+          nameByStudentUid: names,
+        );
+      }
+
+      await widget.service.markPeriodSubmitted(period: widget.period);
+
+      if (!mounted) return;
+      setState(() {
+        _draftStatusByUid.clear();
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Attendance submitted successfully for ${widget.period}',
+          ),
+        ),
+      );
+    } on AttendanceError catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(e.message)),
+      );
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Failed to submit attendance')),
+      );
+    } finally {
+      if (mounted) {
+        setState(() => _submitting = false);
+      }
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
-    return StreamBuilder<List<StudentAttendanceView>>(
-      stream: service.watchAttendanceForSession(period: period),
-      builder: (context, snapshot) {
+    return StreamBuilder<AttendanceSession?>(
+      stream: widget.service.watchSession(period: widget.period),
+      builder: (context, sessionSnapshot) {
+        final isPeriodClosed = sessionSnapshot.data?.isClosed == true;
+
+        return StreamBuilder<List<StudentAttendanceView>>(
+          stream: widget.service.watchAttendanceForSession(period: widget.period),
+          builder: (context, snapshot) {
         if (snapshot.hasError) {
           return GlassCard(
             child: Text(
@@ -412,14 +515,29 @@ class _LiveAttendancePanel extends StatelessWidget {
         }
 
         final rows = snapshot.data!;
-        final summary = service.buildSummary(rows);
-        final present = summary.presentCount;
-        final absent = summary.absentCount;
+        var present = 0;
+        for (final row in rows) {
+          if (_effectiveStatus(row) == 'present') {
+            present++;
+          }
+        }
+        final absent = rows.length - present;
 
         return GlassCard(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
+              if (isPeriodClosed) ...[
+                Text(
+                  '${widget.period} attendance closed',
+                  style: GoogleFonts.poppins(
+                    color: AppColors.warning,
+                    fontWeight: FontWeight.w700,
+                    fontSize: 13,
+                  ),
+                ),
+                const SizedBox(height: 8),
+              ],
               Text(
                 'Students',
                 style: GoogleFonts.poppins(
@@ -513,14 +631,11 @@ class _LiveAttendancePanel extends StatelessWidget {
                             child: Center(
                               child: InkWell(
                                 borderRadius: BorderRadius.circular(20),
-                                onTap: () => service.manualOverride(
-                                  studentUid: row.uid,
-                                  studentName: row.name,
-                                  period: period,
-                                  status: 'present',
-                                ),
+                                onTap: (_submitting || isPeriodClosed)
+                                    ? null
+                                    : () => _stageStatus(row, 'present'),
                                 child: _StatusCircle(
-                                  active: row.status == 'present',
+                                  active: _effectiveStatus(row) == 'present',
                                   activeColor: const Color(0xFF49D19C),
                                 ),
                               ),
@@ -532,14 +647,11 @@ class _LiveAttendancePanel extends StatelessWidget {
                             child: Center(
                               child: InkWell(
                                 borderRadius: BorderRadius.circular(20),
-                                onTap: () => service.manualOverride(
-                                  studentUid: row.uid,
-                                  studentName: row.name,
-                                  period: period,
-                                  status: 'absent',
-                                ),
+                                onTap: (_submitting || isPeriodClosed)
+                                    ? null
+                                    : () => _stageStatus(row, 'absent'),
                                 child: _StatusCircle(
-                                  active: row.status == 'absent',
+                                  active: _effectiveStatus(row) == 'absent',
                                   activeColor: const Color(0xFFFF8F8F),
                                 ),
                               ),
@@ -605,8 +717,47 @@ class _LiveAttendancePanel extends StatelessWidget {
                   ],
                 ),
               ),
+              const SizedBox(height: 12),
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF61B9E8),
+                    foregroundColor: Colors.white,
+                    elevation: 0,
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                  ),
+                  onPressed: (_submitting || isPeriodClosed)
+                      ? null
+                      : () => _submitAttendance(rows),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      if (_submitting) ...[
+                        const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                      ],
+                      const Icon(Icons.upload_outlined, size: 18),
+                      const SizedBox(width: 8),
+                      Text(_submitting ? 'Submitting...' : 'Submit Attendance'),
+                    ],
+                  ),
+                ),
+              ),
             ],
           ),
+        );
+          },
         );
       },
     );

@@ -12,10 +12,9 @@ import '../../services/session_state_service.dart';
 import '../../services/timetable_monitor.dart';
 import '../auth/student_auth_service.dart';
 import '../role_select/role_select_screen.dart';
-import 'attendance/student_attendance_screen.dart';
 import 'home/student_home_screen.dart';
 import 'credits/credits_screen.dart';
-import 'timetable/timetable_screen.dart';
+import 'classroom/student_classroom_screen.dart';
 import 'alerts/alerts_screen.dart';
 import 'profile/student_profile_screen.dart';
 
@@ -45,9 +44,8 @@ class _StudentShellState extends State<StudentShell>
     final studentUID = _resolveStudentUid();
     _pages = [
       StudentHomeScreen(studentData: widget.studentData),
-      StudentAttendanceScreen(studentData: widget.studentData),
+      StudentClassroomScreen(studentData: widget.studentData),
       CreditsScreen(studentData: widget.studentData),
-      TimetableScreen(studentData: widget.studentData),
       AlertsScreen(
         studentUID: studentUID,
         classCandidates: classCandidates,
@@ -75,7 +73,9 @@ class _StudentShellState extends State<StudentShell>
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
-      SessionStateService.instance.safeHeartbeat(source: 'student_shell_resumed');
+      SessionStateService.instance.safeHeartbeat(
+        source: 'student_shell_resumed',
+      );
     }
   }
 
@@ -235,19 +235,14 @@ class _StudentShellState extends State<StudentShell>
   static const _navItems = [
     _NavItem(Icons.home_rounded, Icons.home_outlined, 'Home'),
     _NavItem(
-      Icons.fact_check_rounded,
-      Icons.fact_check_outlined,
+      Icons.calendar_month_rounded,
+      Icons.calendar_month_outlined,
       'Attendance',
     ),
     _NavItem(
       Icons.workspace_premium_rounded,
       Icons.workspace_premium_outlined,
       'Credits',
-    ),
-    _NavItem(
-      Icons.calendar_month_rounded,
-      Icons.calendar_month_outlined,
-      'Schedule',
     ),
     _NavItem(
       Icons.notifications_rounded,

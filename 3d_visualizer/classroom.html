@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Fixed Classroom: Monitoring Dashboard</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background-color: #f0f0f5;
+            font-family: sans-serif;
+        }
+
+        #ui {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            padding: 15px;
+            background: white;
+            border: 2px solid red;
+            border-radius: 8px;
+            z-index: 1000;
+        }
+
+        .alert {
+            color: red;
+            font-weight: bold;
+        }
+    </style>
+</head>
+
+<body>
+    <div id="ui">
+        <b>SMART CLASSROOM 3D</b>
+        <div class="alert">VIOLATION SENSING: ACTIVE</div>
+    </div>
+
+    <script>
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0xdceefb);
+
+        // --- NEW CAMERA ANGLE: VERY CLOSE TO BOARD ---
+        const camera = new THREE.PerspectiveCamera(65, window.innerWidth / window.innerHeight, 0.1, 1000);
+        camera.position.set(0, 5, 20); // Looking from +20 towards 0
+
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        document.body.appendChild(renderer.domElement);
+
+        const controls = new THREE.OrbitControls(camera, renderer.domElement);
+        controls.target.set(0, 5, 0); // TARGET IS DIRECTLY THE BOARD AT 0
+        controls.update();
+
+        // 1. FLOOR (TAN)
+        const floor = new THREE.Mesh(new THREE.PlaneGeometry(100, 100), new THREE.MeshStandardMaterial({ color: 0xd2b48c }));
+        floor.rotation.x = -Math.PI / 2;
+        floor.position.y = 0;
+        scene.add(floor);
+
+        // 2. THE WALL (WHITE - NOW AT Z = 0)
+        const wall = new THREE.Mesh(new THREE.PlaneGeometry(60, 30), new THREE.MeshStandardMaterial({ color: 0xffffff }));
+        wall.position.set(0, 15, 0); // Wall is at Z = 0
+        scene.add(wall);
+
+        // 3. THE BOARD (DARK GREEN - NOW AT Z = 0.1)
+        const board = new THREE.Mesh(new THREE.PlaneGeometry(20, 12), new THREE.MeshStandardMaterial({ color: 0x224422 }));
+        board.position.set(0, 8, 0.1); // Board is slightly in front of wall at Z = 0.1
+        scene.add(board);
+
+        // 4. BOARD FRAME (WOOD)
+        const frame = new THREE.Mesh(new THREE.BoxGeometry(21, 13, 0.1), new THREE.MeshStandardMaterial({ color: 0x8b4513 }));
+        frame.position.set(0, 8, 0.05); // Frame is between wall and board
+        scene.add(frame);
+
+        // 5. TEXT ON THE BOARD
+        const canvas = document.createElement('canvas'); const ctx = canvas.getContext('2d');
+        canvas.width = 512; canvas.height = 256;
+        ctx.fillStyle = 'white'; ctx.font = 'bold 40px sans-serif'; ctx.textAlign = 'center';
+        ctx.fillText("SMART MONITORING", 256, 100);
+        ctx.fillText("AI DETECTION: ON", 256, 180);
+        const textTex = new THREE.CanvasTexture(canvas);
+        const boardText = new THREE.Mesh(new THREE.PlaneGeometry(18, 9), new THREE.MeshStandardMaterial({ map: textTex, transparent: true }));
+        boardText.position.set(0, 8, 0.2); // Text is in front of the board
+        scene.add(boardText);
+
+        // 6. TEACHER (BLUE)
+        const skin = new THREE.MeshStandardMaterial({ color: 0xffdbac });
+        const teacher = new THREE.Group();
+        teacher.add(new THREE.Mesh(new THREE.CylinderGeometry(0.4, 0.5, 1.2), new THREE.MeshStandardMaterial({ color: 0x3498db })));
+        const head = new THREE.Mesh(new THREE.SphereGeometry(0.3, 16, 16), skin); head.position.y = 0.8; teacher.add(head);
+        const arm = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.1, 1), skin);
+        arm.rotation.z = -Math.PI / 3; arm.position.set(0.6, 0.5, 0); teacher.add(arm);
+        teacher.position.set(4, 2, 3); // Standing near the board
+        teacher.rotation.y = Math.PI;
+        scene.add(teacher);
+
+        // 7. LIGHTS
+        scene.add(new THREE.AmbientLight(0xffffff, 0.8));
+        const sun = new THREE.DirectionalLight(0xffffff, 0.8);
+        sun.position.set(10, 20, 20);
+        scene.add(sun);
+
+        // 8. STUDENTS (SCATTERED IN FRONT OF BOARD)
+        function createStudent(isV, x, z) {
+            const student = new THREE.Group();
+            student.add(new THREE.Mesh(new THREE.CylinderGeometry(0.35, 0.45, 1), new THREE.MeshStandardMaterial({ color: isV ? 0xc0392b : 0x27ae60 })));
+            const sHead = new THREE.Mesh(new THREE.SphereGeometry(0.25, 16, 16), skin);
+            sHead.position.y = 0.7; student.add(sHead);
+            if (isV) {
+                const phone = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.2, 0.04), new THREE.MeshStandardMaterial({ color: 0x000000, emissive: 0x00ffff, emissiveIntensity: 0.5 }));
+                phone.position.set(0, 0.4, -0.4); student.add(phone);
+                // Notification Alert Bubble
+                const bc = document.createElement('canvas'); const bctx = bc.getContext('2d');
+                bc.width = 256; bc.height = 64; bctx.fillStyle = 'red'; bctx.fillRect(0, 0, 256, 64);
+                bctx.fillStyle = 'white'; bctx.font = 'bold 24px sans-serif'; bctx.textAlign = 'center'; bctx.fillText("! ALERT !", 128, 40);
+                const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(bc), transparent: true }));
+                sp.scale.set(4, 0.8, 1); sp.position.y = 1.6; student.add(sp);
+            }
+            student.position.set(x, 1, z);
+            scene.add(student);
+        }
+
+        // Students placed at Z = 10 and Z = 15
+        [[-6, 10], [0, 10], [6, 10], [-6, 15], [6, 15]].forEach((pos, i) => {
+            createStudent(i === 1 || i === 3, pos[0], pos[1]);
+        });
+
+        function animate() {
+            requestAnimationFrame(animate); controls.update(); renderer.render(scene, camera);
+        }
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight; camera.updateProjectionMatrix(); renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+        animate();
+    </script>
+</body>
+
+</html>

@@ -33,6 +33,8 @@ void main() {
   });
 
   testWidgets('App launches and shows role select screen', (WidgetTester tester) async {
+    addTearDown(tester.view.resetPhysicalSize);
+    
     await tester.pumpWidget(const SmartClassroomApp());
     await tester.pumpAndSettle();
 

@@ -11,31 +11,24 @@ service cloud.firestore {
               && exists(/databases/$(database)/documents/admins/$(request.auth.token.email))
             )
             || (
-              exists(/databases/$(database)/documents/users/$(request.auth.uid))
-              && (
-                get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin'
-                || get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'Admin'
-                || get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'ADMIN'
-                || get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'administrator'
-                || get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'Administrator'
-                || get(/databases/$(database)/documents/users/$(request.auth.uid)).data.userType == 'admin'
-                || get(/databases/$(database)/documents/users/$(request.auth.uid)).data.userType == 'Admin'
-                || get(/databases/$(database)/documents/users/$(request.auth.uid)).data.isAdmin == true
-              )
+              request.auth.token.customClaims != null
+              && request.auth.token.customClaims.isAdmin == true
+            )
+            || (
+              request.auth.token.customClaims != null
+              && request.auth.token.customClaims.role in ['admin', 'Admin', 'ADMIN', 'administrator', 'Administrator']
             )
           );
     }
 
     function isAdvisor() {
       return request.auth != null
-          && exists(/databases/$(database)/documents/users/$(request.auth.uid))
           && (
-            get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'advisor'
-            || get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'Advisor'
-            || get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'ADVISOR'
-            || get(/databases/$(database)/documents/users/$(request.auth.uid)).data.userType == 'advisor'
-            || get(/databases/$(database)/documents/users/$(request.auth.uid)).data.userType == 'Advisor'
-            || get(/databases/$(database)/documents/users/$(request.auth.uid)).data.isAdvisor == true
+            request.auth.token.customClaims != null
+            && (
+              request.auth.token.customClaims.isAdvisor == true
+              || request.auth.token.customClaims.role in ['advisor', 'Advisor', 'ADVISOR']
+            )
           );
     }
 
@@ -71,8 +64,20 @@ service cloud.firestore {
 
     // ── USERS (role mapping) ────────────────────────────────────────────────
     match /users/{uid} {
-      allow read: if request.auth != null && request.auth.uid == uid;
+      allow read: if request.auth != null
+                  && (request.auth.uid == uid || isAdmin());
       allow write: if false;
+    }
+
+    // ── STUDENT SESSIONS (login state / heartbeat) ───────────────────────────
+    // Students write their own session doc (docId = their UID).
+    // Admins can read all session docs for the live dashboard.
+    match /student_sessions/{docId} {
+      allow read: if request.auth != null
+                  && (request.auth.uid == docId || isAdmin());
+      allow create, update: if request.auth != null
+                            && (request.auth.uid == docId || isAdmin());
+      allow delete: if false;
     }
 
     // ── DEVICES ───────────────────────────────────────────────────────────────
@@ -137,10 +142,17 @@ service cloud.firestore {
                     || resource.data.studentUID == request.auth.uid
                   );
 
+      // Students can create their own attendance (manual==false, status==present).
+      // Admins can create any record (manual overrides, batch submissions).
       allow create: if request.auth != null
-                    && request.resource.data.studentUID == request.auth.uid
-                    && request.resource.data.status == 'present'
-                    && request.resource.data.manual == false;
+                    && (
+                      isAdmin()
+                      || (
+                        request.resource.data.studentUID == request.auth.uid
+                        && request.resource.data.status == 'present'
+                        && request.resource.data.manual == false
+                      )
+                    );
 
       allow update: if request.auth != null
                     && (
