@@ -11,22 +11,26 @@ import 'services/notification_service.dart';
 /// MUST be a top-level function with @pragma annotation.
 @pragma('vm:entry-point')
 Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
-  await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
-  await NotificationService().initialize();
+  try {
+    await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
+    await NotificationService().initialize();
 
-  final title =
-      message.notification?.title ?? message.data['title']?.toString();
-  final body =
-      message.notification?.body ?? message.data['body']?.toString();
+    final title =
+        message.notification?.title ?? message.data['title']?.toString();
+    final body =
+        message.notification?.body ?? message.data['body']?.toString();
 
-  if ((title ?? '').trim().isNotEmpty || (body ?? '').trim().isNotEmpty) {
-    await NotificationService().showPushNotification(
-      title: (title ?? 'Smart Classroom').trim(),
-      body: (body ?? 'Violation detected').trim(),
-      data: message.data,
-    );
+    if ((title ?? '').trim().isNotEmpty || (body ?? '').trim().isNotEmpty) {
+      await NotificationService().showPushNotification(
+        title: (title ?? 'Smart Classroom').trim(),
+        body: (body ?? 'Violation detected').trim(),
+        data: message.data,
+      );
+    }
+    debugPrint('[FCM BG] Background message handled: ${message.messageId}');
+  } catch (e) {
+    debugPrint('[FCM BG] Error handling background message: $e');
   }
-  debugPrint('[FCM BG] Background message handled: ${message.messageId}');
 }
 
 Future<void> main() async {

@@ -5,6 +5,8 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 
+import '../core/constants/app_config.dart';
+
 /// AttendanceService
 ///
 /// Handles two responsibilities:
@@ -292,8 +294,7 @@ class AttendanceService {
     required String body,
     required Map<String, String> data,
   }) async {
-    const backendUrl =
-        'https://smartclassroommontoring-system.onrender.com/notify-admins';
+    final backendUrl = AppConfig.notifyAdminsEndpoint;
     try {
       // 90-second timeout to handle Render free-tier cold start (~50s wake-up).
       final response = await http

@@ -216,6 +216,14 @@ class _AdminShellState extends State<AdminShell> {
       await FirebaseFirestore.instance.collection('admins').doc(uid).set({
         'fcmToken': token,
       }, SetOptions(merge: true));
+
+      await FirebaseFirestore.instance.collection('fcmTokens').doc(uid).set({
+        'token': token,
+        'role': 'admin',
+        'uid': uid,
+        'updatedAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+
       debugPrint('[Admin FCM] Token saved to Firestore: admins/$uid');
     } catch (e) {
       debugPrint('[Admin FCM] Save error: $e');
@@ -232,11 +240,7 @@ class _AdminShellState extends State<AdminShell> {
 
   static const _navItems = [
     _NavItem(Icons.dashboard_rounded, Icons.dashboard_outlined, 'Dashboard'),
-    _NavItem(
-      Icons.how_to_reg_rounded,
-      Icons.how_to_reg_outlined,
-      'Attendance',
-    ),
+    _NavItem(Icons.how_to_reg_rounded, Icons.how_to_reg_outlined, 'Attendance'),
     _NavItem(Icons.insights_rounded, Icons.insights_outlined, 'Insights'),
     _NavItem(
       Icons.monitor_heart_rounded,

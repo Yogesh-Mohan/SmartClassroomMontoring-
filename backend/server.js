@@ -122,16 +122,34 @@ app.post('/notify-admins', async (req, res) => {
       ? Object.fromEntries(Object.entries(data).map(([key, value]) => [key, String(value)]))
       : {};
 
-    const adminsSnap = await admin.firestore().collection('admins').get();
-    if (adminsSnap.empty) {
-      return res.status(200).json({ success: true, tokenCount: 0, successCount: 0, failureCount: 0 });
-    }
+    const db = admin.firestore();
+    const tokenSet = new Set();
 
-    const tokens = [];
+    const adminsSnap = await db.collection('admins').get();
     adminsSnap.forEach((doc) => {
       const token = (doc.data()?.fcmToken || '').toString().trim();
-      if (token) tokens.push(token);
+      if (token) tokenSet.add(token);
     });
+
+    const adminTokensSnap = await db
+      .collection('fcmTokens')
+      .where('role', '==', 'admin')
+      .get();
+    adminTokensSnap.forEach((doc) => {
+      const token = (doc.data()?.token || '').toString().trim();
+      if (token) tokenSet.add(token);
+    });
+
+    const admin1TokenDoc = await db.collection('fcmTokens').doc('admin1').get();
+    const admin1Token = (admin1TokenDoc.data()?.token || '').toString().trim();
+    if (admin1Token) {
+      tokenSet.add(admin1Token);
+    }
+
+    const tokens = Array.from(tokenSet);
+    if (tokens.length === 0) {
+      return res.status(200).json({ success: true, tokenCount: 0, successCount: 0, failureCount: 0 });
+    }
 
     let successCount = 0;
     let failureCount = 0;

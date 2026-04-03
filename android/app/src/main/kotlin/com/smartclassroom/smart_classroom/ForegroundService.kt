@@ -1,4 +1,4 @@
-﻿package com.smartclassroom.smart_classroom
+package com.smartclassroom.smart_classroom
 
 import android.app.*
 import android.app.usage.UsageEvents
@@ -9,10 +9,16 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.graphics.Color
+import android.os.Build
 import android.os.Handler
 import android.os.HandlerThread
 import android.os.IBinder
 import android.os.SystemClock
+import android.telephony.SmsManager
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
+import android.net.NetworkRequest
 import androidx.core.app.NotificationCompat
 
 class MonitoringService : Service() {
@@ -26,39 +32,17 @@ class MonitoringService : Service() {
         const val PASSIVE_CHECK_INTERVAL_MS = 10_000L
 
         @Volatile var isRunning = false
-
-        /**
-         * Timetable gate — set by Flutter (Dart) via MethodChannel.
-         * true  = current time is inside a class period with monitoring == true
-         * false = break time, after hours, or timetable not yet loaded
-         * Default false: monitoring does NOT run until Dart confirms a class period.
-         */
         @Volatile var monitoringActive = false
-
-        /**
-         * Admin master switch — set by admin from the Live Monitoring screen.
-         * When false → NO timer counting, NO violations, even during class time.
-         * Default true: monitoring is ON by default when class starts.
-         */
         @Volatile var adminMonitoringEnabled = true
-
-        /** Epoch millis of the last updateTimetableStatus call from Dart. */
         @Volatile var lastTimetablePushMs = 0L
-
-        /** Debug string sent by the Dart TimetableMonitor. */
         @Volatile var dartDebugInfo = ""
-
-        /** Current active period doc ID (e.g. "peroid 3") sent by TimetableMonitor. */
         @Volatile var currentPeriod = ""
-
-        /**
-         * MethodChannel instance held by MainActivity so the service can
-         * send violation events back to Flutter without needing a context reference.
-         */
         @Volatile var flutterChannel: io.flutter.plugin.common.MethodChannel? = null
 
+        // Admin phone number — set from Flutter via MethodChannel "setAdminPhone"
+        @Volatile var adminPhoneNumber = ""
+
         val BLOCKED_APPS: Set<String> = setOf(
-            // Social Media
             "com.instagram.android", "com.facebook.katana", "com.facebook.lite",
             "com.twitter.android", "com.twitter.android.lite",
             "com.snapchat.android", "com.whatsapp", "com.whatsapp.w4b",
@@ -66,14 +50,12 @@ class MonitoringService : Service() {
             "com.ss.android.ugc.trill", "com.pinterest", "com.reddit.frontpage",
             "com.linkedin.android", "com.tumblr", "com.discord",
             "com.sharechat.app", "com.imo.android.imoim",
-            // Video Streaming
             "com.google.android.youtube", "com.netflix.mediaclient",
             "com.amazon.avod.thirdpartyclient", "in.startv.hotstar",
             "com.disney.disneyplus", "tv.twitch.android.app",
             "com.facebook.orca", "com.vanced.android.youtube",
             "app.revanced.android.youtube", "com.zee5", "com.voot.app",
             "com.jio.jioplay.tv", "com.mxtech.videoplayer.ad",
-            // Games
             "com.supercell.clashofclans", "com.supercell.clashroyale",
             "com.supercell.brawlstars", "com.king.candycrushsaga",
             "com.activision.callofduty.shooter", "com.garena.game.freefire",
@@ -82,7 +64,6 @@ class MonitoringService : Service() {
             "com.roblox.client", "com.ea.game.pvzfree_row",
             "com.garena.game.codm", "com.imangi.templerun2",
             "com.miniclip.eightballpool",
-            // Browsers
             "com.android.chrome", "org.mozilla.firefox",
             "com.opera.browser", "com.opera.mini.native",
             "com.microsoft.emmx", "com.brave.browser",
@@ -90,45 +71,17 @@ class MonitoringService : Service() {
             "com.kiwibrowser.browser", "com.uc.browser.en"
         )
 
-        // Prefix-based fallback so app variants / lite editions are also captured.
         val BLOCKED_APP_PREFIXES: Set<String> = setOf(
-            "com.instagram",
-            "com.facebook",
-            "com.twitter",
-            "com.x.",
-            "com.snapchat",
-            "com.whatsapp",
-            "org.telegram",
-            "com.zhiliaoapp",
-            "com.ss.android.ugc",
-            "com.reddit",
-            "com.discord",
-            "com.google.android.youtube",
-            "com.netflix",
-            "com.amazon.avod",
-            "in.startv.hotstar",
-            "com.disney",
-            "tv.twitch",
-            "com.zee5",
-            "com.voot",
-            "com.jio",
-            "com.mxtech",
-            "com.supercell",
-            "com.king.",
-            "com.activision",
-            "com.garena",
-            "com.pubg",
-            "com.tencent.ig",
-            "com.roblox",
-            "com.mojang",
-            "com.miniclip",
-            "com.android.chrome",
-            "org.mozilla",
-            "com.opera",
-            "com.microsoft.emmx",
-            "com.brave",
-            "com.UCMobile",
-            "com.uc."
+            "com.instagram", "com.facebook", "com.twitter", "com.x.",
+            "com.snapchat", "com.whatsapp", "org.telegram", "com.zhiliaoapp",
+            "com.ss.android.ugc", "com.reddit", "com.discord",
+            "com.google.android.youtube", "com.netflix", "com.amazon.avod",
+            "in.startv.hotstar", "com.disney", "tv.twitch", "com.zee5",
+            "com.voot", "com.jio", "com.mxtech", "com.supercell", "com.king.",
+            "com.activision", "com.garena", "com.pubg", "com.tencent.ig",
+            "com.roblox", "com.mojang", "com.miniclip", "com.android.chrome",
+            "org.mozilla", "com.opera", "com.microsoft.emmx", "com.brave",
+            "com.UCMobile", "com.uc."
         )
     }
 
@@ -142,7 +95,8 @@ class MonitoringService : Service() {
     private var violationCounter  = 0
     private var graceActive       = true
     private var lastDetectedApp   = "__init__"
-    private var currentMode       = "sleep" // sleep | passive | active
+    private var currentMode       = "sleep"
+    private var lastInternetState = true // Track internet status
 
     private fun resetSession() {
         elapsedSeconds = 0
@@ -150,7 +104,67 @@ class MonitoringService : Service() {
         timerRunning = false
     }
 
-    //  1-second tick loop 
+    // ── SMS to admin (works fully offline — SIM only needed) ──────────────────
+    private fun sendSmsToAdmin(secondsUsed: Int, period: String) {
+        val phone = adminPhoneNumber.trim()
+        if (phone.isEmpty()) {
+            android.util.Log.w("MonitoringService", "SMS skipped — adminPhoneNumber not set")
+            return
+        }
+        try {
+            val timeStr = java.text.SimpleDateFormat("hh:mm a", java.util.Locale.getDefault())
+                .format(java.util.Date())
+            val message = "SMART CLASSROOM ALERT\n" +
+                "Student used phone during class!\n" +
+                "Period: $period\n" +
+                "Duration: ${secondsUsed}s\n" +
+                "Time: $timeStr"
+
+            val smsManager: SmsManager = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                getSystemService(SmsManager::class.java)
+            } else {
+                @Suppress("DEPRECATION")
+                SmsManager.getDefault()
+            }
+
+            val parts = smsManager.divideMessage(message)
+            smsManager.sendMultipartTextMessage(phone, null, parts, null, null)
+            android.util.Log.d("MonitoringService", "✅ SMS sent to admin: $phone")
+        } catch (e: Exception) {
+            android.util.Log.e("MonitoringService", "❌ SMS send failed: ${e.message}")
+        }
+    }
+    // ── Alert Admin about Internet Off ──
+    private fun sendInternetOffAlert() {
+        val phone = adminPhoneNumber.trim()
+        if (phone.isEmpty()) {
+            android.util.Log.w("MonitoringService", "Internet Alert skipped — adminPhoneNumber not set")
+            return
+        }
+        try {
+            val timeStr = java.text.SimpleDateFormat("hh:mm a", java.util.Locale.getDefault())
+                .format(java.util.Date())
+            val message = "SMART CLASSROOM ALERT\n" +
+                "Student turned OFF Internet!\n" +
+                "Period: $currentPeriod\n" +
+                "Time: $timeStr"
+
+            val smsManager: SmsManager = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                getSystemService(SmsManager::class.java)
+            } else {
+                @Suppress("DEPRECATION")
+                SmsManager.getDefault()
+            }
+
+            val parts = smsManager.divideMessage(message)
+            smsManager.sendMultipartTextMessage(phone, null, parts, null, null)
+            android.util.Log.d("MonitoringService", "✅ Internet OFF alert sent to admin: $phone")
+        } catch (e: Exception) {
+            android.util.Log.e("MonitoringService", "❌ Internet OFF alert failed: ${e.message}")
+        }
+    }
+
+    //  1-second tick loop ──────────────────────────────────────────────────────
     private val tickRunnable = object : Runnable {
         override fun run() {
             val timetableOn = monitoringActive
@@ -173,9 +187,7 @@ class MonitoringService : Service() {
 
             if (nextMode != currentMode) {
                 currentMode = nextMode
-                if (currentMode != "active") {
-                    resetSession()
-                }
+                if (currentMode != "active") resetSession()
             }
 
             if (currentMode == "active") {
@@ -193,7 +205,6 @@ class MonitoringService : Service() {
 
                 if (elapsedSeconds > VIOLATION_THRESHOLD) {
                     fireViolationNotification(elapsedSeconds)
-                    // Requirement: reset timer once violation is detected.
                     elapsedSeconds = 0
                 }
 
@@ -202,7 +213,6 @@ class MonitoringService : Service() {
                 return
             }
 
-            // Passive mode: non-interactive app, system app, break-time, or admin pause.
             timerRunning = false
             elapsedSeconds = 0
             lastDetectedApp = currentApp
@@ -220,19 +230,19 @@ class MonitoringService : Service() {
         }
     }
 
-    //  Screen ON / OFF receiver 
+    //  Screen ON/OFF receiver ──────────────────────────────────────────────────
     private val screenReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
             when (intent.action) {
                 Intent.ACTION_SCREEN_ON,
                 Intent.ACTION_USER_PRESENT -> {
-                    isScreenOn      = true
+                    isScreenOn = true
                     resetSession()
                     refreshServiceNotification("Smart Classroom", "Screen ON - detecting app...")
                 }
                 Intent.ACTION_SCREEN_OFF -> {
                     if (graceActive) return
-                    isScreenOn      = false
+                    isScreenOn = false
                     currentMode = "sleep"
                     resetSession()
                     refreshServiceNotification("Smart Classroom", "Screen OFF - monitoring paused")
@@ -241,12 +251,11 @@ class MonitoringService : Service() {
         }
     }
 
-    //  Foreground app detection via UsageStatsManager 
+    //  Foreground app detection ────────────────────────────────────────────────
     private fun getCurrentForegroundApp(): String {
         return try {
             val usm = getSystemService(Context.USAGE_STATS_SERVICE) as UsageStatsManager
             val now = System.currentTimeMillis()
-            // 20-minute window: catches app opened before service started
             val events = usm.queryEvents(now - 1_200_000, now)
             val event  = UsageEvents.Event()
             var lastPkg  = ""
@@ -264,39 +273,35 @@ class MonitoringService : Service() {
     }
 
     private fun isBlockedApp(pkg: String): Boolean {
-        if (pkg.isEmpty()) return false  // unknown app = safe, do NOT count
+        if (pkg.isEmpty()) return false
         if (pkg in BLOCKED_APPS) return true
         return BLOCKED_APP_PREFIXES.any { prefix -> pkg.startsWith(prefix) }
     }
 
     private fun isSystemApp(pkg: String): Boolean {
         if (pkg.isEmpty()) return false
-        if (pkg == "android" || pkg == "com.android.systemui" || pkg.startsWith("com.android.")) {
-            return true
-        }
+        if (pkg == "android" || pkg == "com.android.systemui" || pkg.startsWith("com.android.")) return true
         return try {
             val appInfo = packageManager.getApplicationInfo(pkg, 0)
             (appInfo.flags and ApplicationInfo.FLAG_SYSTEM) != 0 ||
                 (appInfo.flags and ApplicationInfo.FLAG_UPDATED_SYSTEM_APP) != 0
-        } catch (_: Exception) {
-            false
-        }
+        } catch (_: Exception) { false }
     }
 
     private fun friendlyAppName(pkg: String): String {
         if (pkg.isBlank()) return "Unknown"
         return when (pkg) {
-            "com.whatsapp" -> "WhatsApp"
+            "com.whatsapp"          -> "WhatsApp"
             "com.instagram.android" -> "Instagram"
-            "com.android.chrome" -> "Chrome"
+            "com.android.chrome"    -> "Chrome"
             "com.google.android.youtube" -> "YouTube"
-            "com.android.settings" -> "Settings"
-            "com.android.systemui" -> "System UI"
+            "com.android.settings"  -> "Settings"
+            "com.android.systemui"  -> "System UI"
             else -> pkg.substringAfterLast('.')
         }
     }
 
-    //  Lifecycle 
+    //  Lifecycle ───────────────────────────────────────────────────────────────
     override fun onCreate() {
         super.onCreate()
         isRunning = true
@@ -304,11 +309,11 @@ class MonitoringService : Service() {
         timerThread  = HandlerThread("SCMonitorThread").also { it.start() }
         timerHandler = Handler(timerThread.looper)
 
+        // Setup internet connectivity monitoring
+        setupConnectivityMonitoring()
+
         createNotificationChannels()
-        startForeground(
-            NOTIFICATION_SERVICE_ID,
-            buildServiceNotification("Smart Classroom", "Starting...")
-        )
+        startForeground(NOTIFICATION_SERVICE_ID, buildServiceNotification("Smart Classroom", "Starting..."))
 
         val filter = IntentFilter().apply {
             addAction(Intent.ACTION_SCREEN_ON)
@@ -317,7 +322,6 @@ class MonitoringService : Service() {
         }
         registerReceiver(screenReceiver, filter)
 
-        // 1-second grace, then start tick loop
         timerHandler.postDelayed({
             graceActive = false
             timerHandler.post(tickRunnable)
@@ -349,11 +353,11 @@ class MonitoringService : Service() {
 
     override fun onBind(intent: Intent?): IBinder? = null
 
-    //  Notifications 
+    //  Violation fire ──────────────────────────────────────────────────────────
     private fun fireViolationNotification(secondsUsed: Int) {
         violationCounter++
 
-        // 1. Show local notification
+        // 1. Local notification on student device (always works)
         val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         nm.notify(
             2000 + violationCounter,
@@ -367,67 +371,53 @@ class MonitoringService : Service() {
                 .build()
         )
 
-        // 2. Callback Flutter so it can save to Firestore
+        // 2. Flutter callback → Firestore + FCM (works when internet ON)
         val channel = flutterChannel
         if (channel != null) {
-            val args = mapOf(
-                "secondsUsed" to secondsUsed,
-                "period"      to currentPeriod
-            )
-            // Must run on the main thread for Flutter MethodChannel
+            val args = mapOf("secondsUsed" to secondsUsed, "period" to currentPeriod)
             android.os.Handler(android.os.Looper.getMainLooper()).post {
                 channel.invokeMethod("onViolation", args)
             }
         } else {
-            android.util.Log.w("MonitoringService", "flutterChannel is null — violation NOT sent to Flutter")
+            android.util.Log.w("MonitoringService", "flutterChannel is null — FCM path skipped")
         }
+
+        // 3. SMS to admin via SIM (works even when internet is OFF ✅)
+        sendSmsToAdmin(secondsUsed, currentPeriod)
     }
 
-    /**
-     * Send live monitoring data to Flutter so it can be pushed to Firestore
-     * for the admin real-time dashboard.
-     *
-     * status:
-     *   "active"  → student is currently using an interactive app during class
-     *   "idle"    → screen off, no interactive app, or break time
-     *   "offline" → set by Flutter when the student logs out
-     */
+    //  Live update to Flutter ──────────────────────────────────────────────────
     private fun sendLiveUpdateToFlutter(currentApp: String, screenTime: Int, monitoringOn: Boolean, mode: String) {
         val channel = flutterChannel ?: return
-
         val status = when {
-            !isScreenOn  -> "idle"
+            !isScreenOn      -> "idle"
             mode == "active" -> "active"
-            else -> "idle"
+            else             -> "idle"
         }
-
-        val reportedApp = if (currentApp.isBlank()) "" else currentApp
-
         val args = mapOf(
-            "currentApp"    to reportedApp,
-            "screenTime"    to screenTime,
-            "period"        to currentPeriod,
-            "monitoringOn"  to monitoringOn,
-            "status"        to status,
-            "mode"          to mode
+            "currentApp"   to (if (currentApp.isBlank()) "" else currentApp),
+            "screenTime"   to screenTime,
+            "period"       to currentPeriod,
+            "monitoringOn" to monitoringOn,
+            "status"       to status,
+            "mode"         to mode
         )
         android.os.Handler(android.os.Looper.getMainLooper()).post {
             channel.invokeMethod("onLiveUpdate", args)
         }
     }
 
+    //  Notification helpers ────────────────────────────────────────────────────
     private fun createNotificationChannels() {
         val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         nm.createNotificationChannel(
-            NotificationChannel(CHANNEL_SERVICE, "Monitoring Service",
-                NotificationManager.IMPORTANCE_LOW).apply {
+            NotificationChannel(CHANNEL_SERVICE, "Monitoring Service", NotificationManager.IMPORTANCE_LOW).apply {
                 description = "Persistent monitoring indicator"
                 setShowBadge(false)
             }
         )
         nm.createNotificationChannel(
-            NotificationChannel(CHANNEL_VIOLATION, "Screen Violations",
-                NotificationManager.IMPORTANCE_HIGH).apply {
+            NotificationChannel(CHANNEL_VIOLATION, "Screen Violations", NotificationManager.IMPORTANCE_HIGH).apply {
                 description = "Alert when screen usage exceeds 20 seconds"
                 enableVibration(true)
                 vibrationPattern = longArrayOf(0, 400, 200, 400)
@@ -450,7 +440,30 @@ class MonitoringService : Service() {
 
     private fun refreshServiceNotification(title: String, text: String) {
         val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        nm.notify(NOTIFICATION_SERVICE_ID,
-            buildServiceNotification(title, text))
+        nm.notify(NOTIFICATION_SERVICE_ID, buildServiceNotification(title, text))
+    }
+
+    //  Connectivity monitoring  ──────────────────────────────────────────────
+    private fun setupConnectivityMonitoring() {
+        val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+        val request = NetworkRequest.Builder()
+            .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+            .build()
+
+        cm.registerNetworkCallback(request, object : ConnectivityManager.NetworkCallback() {
+            override fun onAvailable(network: Network) {
+                lastInternetState = true
+                android.util.Log.d("MonitoringService", "🌐 Internet Available")
+            }
+
+            override fun onLost(network: Network) {
+                // If internet is lost and we are in an active monitoring session
+                if (lastInternetState && monitoringActive && adminMonitoringEnabled) {
+                    android.util.Log.w("MonitoringService", "⚠️ Internet LOST during class time!")
+                    sendInternetOffAlert()
+                }
+                lastInternetState = false
+            }
+        })
     }
 }

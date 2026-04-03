@@ -5,6 +5,7 @@ import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:permission_handler/permission_handler.dart';
 import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_gradients.dart';
 import '../../services/attendance_service.dart';
@@ -23,6 +24,7 @@ class _StudentLoginScreenState extends State<StudentLoginScreen> {
   final _emailController = TextEditingController();
   final _passController = TextEditingController();
   final ScreenMonitorService _monitorService = ScreenMonitorService();
+  String _smsPermissionIssue = '';
   bool _obscure = true;
   bool _loading = false;
 
@@ -38,14 +40,16 @@ class _StudentLoginScreenState extends State<StudentLoginScreen> {
       final data = await StudentAuthService.signIn(email, password);
       final notificationGranted = await _retrieveFcmToken();
       final usageGranted = await _monitorService.hasUsagePermission();
+      final smsGranted = await _requestSmsPermission();
 
-      if (!notificationGranted || !usageGranted) {
+      if (!notificationGranted || !usageGranted || !smsGranted) {
         await StudentAuthService.signOut(explicit: false);
         if (!mounted) return;
         setState(() => _loading = false);
         _showPermissionsRequiredDialog(
           notificationGranted: notificationGranted,
           usageGranted: usageGranted,
+          smsGranted: smsGranted,
         );
         return;
       }
@@ -115,13 +119,45 @@ class _StudentLoginScreenState extends State<StudentLoginScreen> {
     }
   }
 
+  Future<bool> _requestSmsPermission() async {
+    final current = await Permission.sms.status;
+    if (current.isGranted) {
+      _smsPermissionIssue = '';
+      return true;
+    }
+
+    final status = await Permission.sms.request();
+    if (status.isGranted) {
+      _smsPermissionIssue = '';
+      return true;
+    }
+
+    if (status.isRestricted || status.isPermanentlyDenied) {
+      _smsPermissionIssue =
+          'SMS permission is restricted on this device (Android 13+ security).\n\n'
+          'How to fix:\n'
+          '1. In the App Info screen that just opened, tap the 3 dots (⋮) in the top right.\n'
+          '2. Select "Allow restricted settings".\n'
+          '3. Now go to "Permissions" -> "SMS" and select "Allow".\n'
+          '4. Return here and try again.';
+      await openAppSettings();
+      return false;
+    }
+
+    _smsPermissionIssue =
+        'SMS permission denied. Offline admin SMS alert will not work without this.';
+    return false;
+  }
+
   void _showPermissionsRequiredDialog({
     required bool notificationGranted,
     required bool usageGranted,
+    required bool smsGranted,
   }) {
     final missing = <String>[
       if (!notificationGranted) 'Notification permission',
       if (!usageGranted) 'Usage Access permission',
+      if (!smsGranted) 'SMS permission',
     ];
 
     showDialog<void>(
@@ -130,7 +166,9 @@ class _StudentLoginScreenState extends State<StudentLoginScreen> {
       builder: (ctx) => AlertDialog(
         title: const Text('Permission Required'),
         content: Text(
-          'Please allow ${missing.join(' and ')} to continue student login.',
+          !smsGranted && _smsPermissionIssue.isNotEmpty
+              ? 'Please allow ${missing.join(' and ')} to continue student login.\n\n$_smsPermissionIssue'
+              : 'Please allow ${missing.join(' and ')} to continue student login.',
         ),
         actions: [
           TextButton(
@@ -144,6 +182,14 @@ class _StudentLoginScreenState extends State<StudentLoginScreen> {
                 _monitorService.requestUsagePermission();
               },
               child: const Text('Open Settings'),
+            ),
+          if (!smsGranted)
+            ElevatedButton(
+              onPressed: () {
+                Navigator.of(ctx).pop();
+                openAppSettings();
+              },
+              child: const Text('Open App Settings'),
             ),
         ],
       ),

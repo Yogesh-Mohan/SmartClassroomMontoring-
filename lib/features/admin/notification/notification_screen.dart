@@ -7,6 +7,7 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:http/http.dart' as http;
 import '../../../core/theme/app_colors.dart';
 import '../../../core/widgets/glass_card.dart';
+import '../../../core/constants/app_config.dart';
 import '../../../features/admin/notification/proof_image_preview_screen.dart';
 import '../../../models/task_model.dart';
 import '../../../services/student_alerts_service.dart';
@@ -410,8 +411,7 @@ class _NotificationScreenState extends State<NotificationScreen>
     required String body,
     Map<String, String>? data,
   }) async {
-    const backendUrl =
-        'https://smartclassroommontoring-system.onrender.com/send-notification';
+    final backendUrl = AppConfig.sendNotificationEndpoint;
 
     const maxAttempts = 2;
     for (var attempt = 1; attempt <= maxAttempts; attempt++) {

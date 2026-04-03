@@ -107,6 +107,20 @@ service cloud.firestore {
       allow read: if request.auth != null;
       allow create: if request.auth != null
                     && request.resource.data.studentUID == request.auth.uid;
+      allow update: if request.auth != null
+                    && resource.data.studentUID == request.auth.uid
+                    && request.resource.data.studentUID == resource.data.studentUID;
+      allow delete: if false;
+    }
+
+    // ── ALERTS ───────────────────────────────────────────────────────────────
+    // Student app writes alert delivery result (FCM/SMS status).
+    // Admin can read for monitoring dashboards.
+    match /alerts/{docId} {
+      allow read: if request.auth != null
+                  && (isAdmin() || resource.data.studentUID == request.auth.uid);
+      allow create: if request.auth != null
+                    && request.resource.data.studentUID == request.auth.uid;
       allow update, delete: if false;
     }
 
