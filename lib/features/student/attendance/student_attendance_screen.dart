@@ -201,7 +201,7 @@ class _StudentAttendanceScreenState extends State<StudentAttendanceScreen> {
             const SizedBox(height: 14),
             GlassCard(
               child: Text(
-                'Validation includes code check, session time, active status, geofence, and duplicate prevention.',
+                'Validation includes code check, session time, active status, and duplicate prevention.',
                 style: GoogleFonts.poppins(color: AppColors.textSecondary),
               ),
             ),

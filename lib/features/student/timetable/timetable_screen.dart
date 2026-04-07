@@ -139,7 +139,10 @@ class _TimetableScreenState extends State<TimetableScreen> {
 
     final entries = snap.docs.map((doc) {
       final data = doc.data();
-      final raw  = data['monitoring'] ?? data['montoring'];
+      if (!data.containsKey('monitoring') && data.containsKey('montoring')) {
+        debugPrint('[TimetableScreen] Typo field found in ${doc.id}: montoring. Please migrate to monitoring.');
+      }
+      final raw  = data['monitoring'];
       final isClass = (raw == true || raw == 'true');
       final start = (data['startTime'] as num?)?.toInt() ?? 0;
       final end   = (data['endTime']   as num?)?.toInt() ?? 0;

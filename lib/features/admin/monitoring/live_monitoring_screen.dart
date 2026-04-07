@@ -41,8 +41,11 @@ class _LiveMonitoringScreenState extends State<LiveMonitoringScreen> {
 
   // Cached streams to prevent re-subscription loops
   late Stream<QuerySnapshot> _liveStream;
-  late Stream<Set<String>> _attendanceStream;
-  late Stream<QuerySnapshot> _studentsStream;
+  StreamSubscription<QuerySnapshot>? _attendanceSubscription;
+  StreamSubscription<QuerySnapshot>? _studentsSubscription;
+  final Set<String> _presentUids = <String>{};
+  final Map<String, Map<String, dynamic>> _studentsByUid =
+      <String, Map<String, dynamic>>{};
 
   String _todayDateKey() {
     final now = DateTime.now();
@@ -129,13 +132,11 @@ class _LiveMonitoringScreenState extends State<LiveMonitoringScreen> {
         .orderBy('lastUpdated', descending: true)
         .snapshots();
 
-    _studentsStream = FirebaseFirestore.instance.collection('students').snapshots();
-
-    _attendanceStream = FirebaseFirestore.instance
+    _attendanceSubscription = FirebaseFirestore.instance
         .collection('attendance')
         .where('date', isEqualTo: _todayDateKey())
         .snapshots()
-        .map((snap) {
+        .listen((snap) {
           final present = <String>{};
           for (final doc in snap.docs) {
             final data = doc.data();
@@ -143,7 +144,31 @@ class _LiveMonitoringScreenState extends State<LiveMonitoringScreen> {
             final uid = _attendanceUid(doc.id, data);
             if (uid.isNotEmpty) present.add(uid);
           }
-          return present;
+          if (!mounted) return;
+          setState(() {
+            _presentUids
+              ..clear()
+              ..addAll(present);
+          });
+        });
+
+    _studentsSubscription = FirebaseFirestore.instance
+        .collection('students')
+        .snapshots()
+        .listen((snap) {
+          final nextMap = <String, Map<String, dynamic>>{};
+          for (final studentDoc in snap.docs) {
+            final student = Map<String, dynamic>.from(studentDoc.data());
+            final uid = (student['uid'] ?? studentDoc.id).toString().trim();
+            if (uid.isEmpty) continue;
+            nextMap[uid] = student;
+          }
+          if (!mounted) return;
+          setState(() {
+            _studentsByUid
+              ..clear()
+              ..addAll(nextMap);
+          });
         });
 
     // Stream admin monitoring master switch state from Firestore
@@ -182,6 +207,8 @@ class _LiveMonitoringScreenState extends State<LiveMonitoringScreen> {
   @override
   void dispose() {
     _tickTimer?.cancel();
+    _attendanceSubscription?.cancel();
+    _studentsSubscription?.cancel();
     _monitoringSettingsStream?.cancel();
     super.dispose();
   }
@@ -607,161 +634,137 @@ class _LiveMonitoringScreenState extends State<LiveMonitoringScreen> {
                     );
                   }
 
-                  return StreamBuilder<Set<String>>(
-                    stream: _attendanceStream,
-                    builder: (context, presentSnapshot) {
-                      final presentUids = presentSnapshot.data ?? <String>{};
-                      final liveDocs = snapshot.data!.docs;
-                      _syncTimers(liveDocs, presentUids);
+                  final presentUids = _presentUids;
+                  final liveDocs = snapshot.data!.docs;
+                  _syncTimers(liveDocs, presentUids);
 
-                      return StreamBuilder<QuerySnapshot>(
-                        stream: _studentsStream,
-                        builder: (context, studentsSnapshot) {
-                          final liveByUid = <String, Map<String, dynamic>>{};
-                          for (final doc in liveDocs) {
-                            liveByUid[doc.id] = Map<String, dynamic>.from(
-                              doc.data() as Map<String, dynamic>,
-                            );
-                          }
+                  final liveByUid = <String, Map<String, dynamic>>{};
+                  for (final doc in liveDocs) {
+                    liveByUid[doc.id] = Map<String, dynamic>.from(
+                      doc.data() as Map<String, dynamic>,
+                    );
+                  }
 
-                          final mergedEntries = <Map<String, dynamic>>[];
-                          liveByUid.forEach((uid, data) {
-                            mergedEntries.add({'uid': uid, 'data': data});
-                          });
+                  final mergedEntries = <Map<String, dynamic>>[];
+                  liveByUid.forEach((uid, data) {
+                    mergedEntries.add({'uid': uid, 'data': data});
+                  });
 
-                          if (studentsSnapshot.hasData) {
-                            for (final studentDoc
-                                in studentsSnapshot.data!.docs) {
-                              final student =
-                                  studentDoc.data() as Map<String, dynamic>;
-                              final uid = (student['uid'] ?? studentDoc.id)
-                                  .toString()
-                                  .trim();
-                              if (uid.isEmpty) continue;
+                  for (final entry in _studentsByUid.entries) {
+                    final uid = entry.key;
+                    final student = entry.value;
+                    final alreadyInLive = liveByUid.containsKey(uid);
+                    final isPresent = presentUids.contains(uid);
+                    if (alreadyInLive || isPresent) continue;
 
-                              final alreadyInLive = liveByUid.containsKey(uid);
-                              final isPresent = presentUids.contains(uid);
-                              if (alreadyInLive || isPresent) continue;
+                    mergedEntries.add({
+                      'uid': uid,
+                      'data': {
+                        'studentName':
+                            (student['name'] ?? student['studentName'] ?? 'Unknown')
+                                .toString(),
+                        'regNo':
+                            (student['regNo'] ??
+                                    student['registrationNumber'] ??
+                                    student['studentId'] ??
+                                    student['rollNo'] ??
+                                    '—')
+                                .toString(),
+                        'currentPeriod': 'Not logged in',
+                        'currentApp': '',
+                        'status': 'offline',
+                      },
+                    });
+                  }
 
-                              mergedEntries.add({
-                                'uid': uid,
-                                'data': {
-                                  'studentName':
-                                      (student['name'] ??
-                                              student['studentName'] ??
-                                              'Unknown')
-                                          .toString(),
-                                  'regNo':
-                                      (student['regNo'] ??
-                                              student['registrationNumber'] ??
-                                              student['studentId'] ??
-                                              student['rollNo'] ??
-                                              '—')
-                                          .toString(),
-                                  'currentPeriod': 'Not logged in',
-                                  'currentApp': '',
-                                  'status': 'offline',
-                                },
-                              });
-                            }
-                          }
+                  final filtered = mergedEntries.where((entry) {
+                    final uid = (entry['uid'] ?? '').toString();
+                    final data = entry['data'] as Map<String, dynamic>;
+                    final name = (data['studentName'] ?? '').toString().toLowerCase();
+                    final isOnline = _isOnline(
+                      data,
+                      isPresent: presentUids.contains(uid),
+                    );
+                    final matchesSearch =
+                        _search.isEmpty || name.contains(_search.toLowerCase());
+                    final matchesFilter = _statusFilter == 'all'
+                        ? true
+                        : _statusFilter == 'online'
+                        ? isOnline
+                        : !isOnline;
+                    return matchesSearch && matchesFilter;
+                  }).toList();
 
-                          final filtered = mergedEntries.where((entry) {
-                            final uid = (entry['uid'] ?? '').toString();
-                            final data = entry['data'] as Map<String, dynamic>;
-                            final name = (data['studentName'] ?? '')
-                                .toString()
-                                .toLowerCase();
-                            final isOnline = _isOnline(
-                              data,
-                              isPresent: presentUids.contains(uid),
-                            );
-                            final matchesSearch =
-                                _search.isEmpty ||
-                                name.contains(_search.toLowerCase());
-                            final matchesFilter = _statusFilter == 'all'
-                                ? true
-                                : _statusFilter == 'online'
-                                ? isOnline
-                                : !isOnline;
-                            return matchesSearch && matchesFilter;
-                          }).toList();
+                  final onlineCount = mergedEntries.where((entry) {
+                    final uid = (entry['uid'] ?? '').toString();
+                    final data = entry['data'] as Map<String, dynamic>;
+                    return _isOnline(
+                      data,
+                      isPresent: presentUids.contains(uid),
+                    );
+                  }).length;
 
-                          final onlineCount = mergedEntries.where((entry) {
-                            final uid = (entry['uid'] ?? '').toString();
-                            final data = entry['data'] as Map<String, dynamic>;
-                            return _isOnline(
-                              data,
-                              isPresent: presentUids.contains(uid),
-                            );
-                          }).length;
+                  final offlineCount = mergedEntries.length - onlineCount;
 
-                          final offlineCount = mergedEntries.length - onlineCount;
+                  if (filtered.isEmpty) {
+                    return Center(
+                      child: Text(
+                        'No matching students',
+                        style: GoogleFonts.poppins(
+                          fontSize: 14,
+                          color: AppColors.textSecondary,
+                        ),
+                      ),
+                    );
+                  }
 
-                          if (filtered.isEmpty) {
-                            return Center(
-                              child: Text(
-                                'No matching students',
-                                style: GoogleFonts.poppins(
-                                  fontSize: 14,
-                                  color: AppColors.textSecondary,
-                                ),
-                              ),
-                            );
-                          }
-
-                          return ListView(
-                            padding: const EdgeInsets.fromLTRB(20, 0, 20, 90),
-                            children: [
-                              Row(
-                                children: [
-                                  _SummaryChip(
-                                    count: onlineCount,
-                                    label: 'Online',
-                                    color: AppColors.success,
-                                  ),
-                                  const SizedBox(width: 10),
-                                  _SummaryChip(
-                                    count: offlineCount,
-                                    label: 'Offline',
-                                    color: AppColors.warning,
-                                  ),
-                                ],
-                              ).animate().fadeIn(delay: 200.ms),
-                              const SizedBox(height: 14),
-                              ...filtered.map((entry) {
-                                final uid = (entry['uid'] ?? '').toString();
-                                final data =
-                                    entry['data'] as Map<String, dynamic>;
-                                final isOnline = _isOnline(
-                                  data,
-                                  isPresent: presentUids.contains(uid),
-                                );
-                                final interactive = _isInteractiveUsage(
-                                  data,
-                                  isPresent: presentUids.contains(uid),
-                                );
-                                final tileData = Map<String, dynamic>.from(data)
-                                  ..['status'] = interactive
-                                      ? 'active'
-                                      : isOnline
-                                      ? 'idle'
-                                      : 'offline';
-                                final liveScreenTime =
-                                    interactive ? (_localTimers[uid] ?? 0) : 0;
-                                return Padding(
-                                  padding: const EdgeInsets.only(bottom: 10),
-                                  child: _LiveStudentTile(
-                                    data: tileData,
-                                    liveScreenTime: liveScreenTime,
-                                  ),
-                                );
-                              }),
-                            ],
-                          );
-                        },
-                      );
-                    },
+                  return ListView(
+                    padding: const EdgeInsets.fromLTRB(20, 0, 20, 90),
+                    children: [
+                      Row(
+                        children: [
+                          _SummaryChip(
+                            count: onlineCount,
+                            label: 'Online',
+                            color: AppColors.success,
+                          ),
+                          const SizedBox(width: 10),
+                          _SummaryChip(
+                            count: offlineCount,
+                            label: 'Offline',
+                            color: AppColors.warning,
+                          ),
+                        ],
+                      ).animate().fadeIn(delay: 200.ms),
+                      const SizedBox(height: 14),
+                      ...filtered.map((entry) {
+                        final uid = (entry['uid'] ?? '').toString();
+                        final data = entry['data'] as Map<String, dynamic>;
+                        final isOnline = _isOnline(
+                          data,
+                          isPresent: presentUids.contains(uid),
+                        );
+                        final interactive = _isInteractiveUsage(
+                          data,
+                          isPresent: presentUids.contains(uid),
+                        );
+                        final tileData = Map<String, dynamic>.from(data)
+                          ..['status'] = interactive
+                              ? 'active'
+                              : isOnline
+                              ? 'idle'
+                              : 'offline';
+                        final liveScreenTime =
+                            interactive ? (_localTimers[uid] ?? 0) : 0;
+                        return Padding(
+                          padding: const EdgeInsets.only(bottom: 10),
+                          child: _LiveStudentTile(
+                            data: tileData,
+                            liveScreenTime: liveScreenTime,
+                          ),
+                        );
+                      }),
+                    ],
                   );
                 },
               ),

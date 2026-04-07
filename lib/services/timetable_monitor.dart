@@ -12,7 +12,7 @@ import 'monitor_service.dart';
 /// Every 15 seconds it:
 ///   1. Fetches today's period docs from Firestore
 ///      timetables → {studentClass} → {dayName} (sub-collection)
-///   2. If ANY document has monitoring/montoring == true → monitoringActive = true
+///   2. If ANY document has monitoring == true → monitoringActive = true
 ///   3. Pushes the result to the native MonitoringService via MethodChannel.
 class TimetableMonitor {
   static final TimetableMonitor _instance = TimetableMonitor._internal();
@@ -132,7 +132,10 @@ class TimetableMonitor {
 
       for (final doc in snap.docs) {
         final data = doc.data();
-        final raw = data['monitoring'] ?? data['montoring'];
+        if (!data.containsKey('monitoring') && data.containsKey('montoring')) {
+          debugPrint('[Timetable] ⚠️ Typo field found in ${doc.id}: montoring. Please migrate to monitoring.');
+        }
+        final raw = data['monitoring'];
         final monitoring = (raw == true || raw == 'true');
         final startTime = (data['startTime'] as num?)?.toInt() ?? 0;
         final endTime   = (data['endTime']   as num?)?.toInt() ?? 0;

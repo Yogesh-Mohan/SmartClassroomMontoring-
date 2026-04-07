@@ -10,8 +10,6 @@ import '../../services/attendance_service.dart';
 import '../../services/monitor_service.dart';
 import '../../services/session_state_service.dart';
 import '../../services/timetable_monitor.dart';
-import '../auth/student_auth_service.dart';
-import '../role_select/role_select_screen.dart';
 import 'home/student_home_screen.dart';
 import 'credits/credits_screen.dart';
 import 'classroom/student_classroom_screen.dart';
@@ -82,12 +80,21 @@ class _StudentShellState extends State<StudentShell>
   Future<void> _initializeMonitoring() async {
     final hasPermissions = await _hasRequiredPermissions();
     if (!hasPermissions) {
-      await StudentAuthService.signOut();
-      if (!mounted) return;
-      Navigator.of(context).pushAndRemoveUntil(
-        MaterialPageRoute(builder: (_) => const RoleSelectScreen()),
-        (_) => false,
-      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Usage Access + Notification permission required. Please grant permissions and login again.',
+              style: GoogleFonts.poppins(fontSize: 12),
+            ),
+            backgroundColor: AppColors.warning,
+            behavior: SnackBarBehavior.floating,
+            duration: const Duration(seconds: 4),
+          ),
+        );
+      }
+      // Do not force logout when permissions are missing.
+      // Student can continue using the app; monitoring features stay disabled.
       return;
     }
 
@@ -95,7 +102,14 @@ class _StudentShellState extends State<StudentShell>
         widget.studentData['id'] ??
         widget.studentData['registrationNumber'] ??
         'unknown';
-    final studentName = widget.studentData['name'] ?? 'Student';
+    final studentName =
+      (widget.studentData['name'] ??
+          widget.studentData['studentName'] ??
+          widget.studentData['fullName'] ??
+          widget.studentData['displayName'] ??
+          'Student')
+        .toString()
+        .trim();
     final regNo =
         (widget.studentData['studentId'] ??
                 widget.studentData['registrationNumber'] ??

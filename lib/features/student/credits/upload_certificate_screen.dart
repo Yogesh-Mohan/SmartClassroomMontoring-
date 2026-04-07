@@ -176,6 +176,7 @@ class _UploadCertificateView extends StatelessWidget {
                                     studentName: studentName,
                                     semester: semester,
                                   );
+                                  if (!context.mounted) return;
                                   messenger.showSnackBar(
                                     SnackBar(
                                       content: Text('Certificate submitted for approval.',
@@ -185,6 +186,7 @@ class _UploadCertificateView extends StatelessWidget {
                                   );
                                   if (context.mounted) Navigator.of(context).pop();
                                 } catch (e) {
+                                  if (!context.mounted) return;
                                   messenger.showSnackBar(
                                     SnackBar(
                                       content: Text(e.toString(),
@@ -259,6 +261,18 @@ class _UploadCertificateController extends ChangeNotifier {
   String? errorMessage;
   String _title = '';
   String _description = '';
+  bool _disposed = false;
+
+  @override
+  void dispose() {
+    _disposed = true;
+    super.dispose();
+  }
+
+  void _notifySafe() {
+    if (_disposed) return;
+    notifyListeners();
+  }
 
   double get selectedFileSizeMb =>
       selectedFile == null ? 0 : selectedFile!.size / (1024 * 1024);
@@ -268,7 +282,7 @@ class _UploadCertificateController extends ChangeNotifier {
 
   void updateTitle(String value) {
     _title = value;
-    notifyListeners();
+    _notifySafe();
   }
 
   void updateDescription(String value) {
@@ -286,17 +300,17 @@ class _UploadCertificateController extends ChangeNotifier {
     final file = result.files.single;
     if (file.size > 5 * 1024 * 1024) {
       errorMessage = 'File exceeds 5 MB limit.';
-      notifyListeners();
+      _notifySafe();
       return;
     }
     if (file.bytes == null) {
       errorMessage = 'Unable to read file. Please try another document.';
-      notifyListeners();
+      _notifySafe();
       return;
     }
     selectedFile = file;
     _bytes = file.bytes;
-    notifyListeners();
+    _notifySafe();
   }
 
   Future<void> upload({
@@ -310,7 +324,7 @@ class _UploadCertificateController extends ChangeNotifier {
     uploading = true;
     progress = 0;
     errorMessage = null;
-    notifyListeners();
+    _notifySafe();
 
     try {
       final ext = (selectedFile!.extension ?? '').toLowerCase();
@@ -318,7 +332,7 @@ class _UploadCertificateController extends ChangeNotifier {
       final safeName =
           '${DateTime.now().millisecondsSinceEpoch}_${selectedFile!.name.replaceAll(' ', '_')}';
       progress = 0.4;
-      notifyListeners();
+      _notifySafe();
 
       final url = await CloudinaryUploadService.uploadBytes(
         bytes: _bytes!,
@@ -329,7 +343,7 @@ class _UploadCertificateController extends ChangeNotifier {
       );
 
       progress = 0.85;
-      notifyListeners();
+      _notifySafe();
 
       await CreditsService.instance.createCertificateRecord(
         studentId: studentId,
@@ -344,11 +358,11 @@ class _UploadCertificateController extends ChangeNotifier {
       );
       uploading = false;
       progress = 1;
-      notifyListeners();
+      _notifySafe();
     } catch (e) {
       uploading = false;
       errorMessage = e.toString();
-      notifyListeners();
+      _notifySafe();
       rethrow;
     }
   }

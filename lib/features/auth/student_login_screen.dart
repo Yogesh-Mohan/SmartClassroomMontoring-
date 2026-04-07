@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:ui';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -24,7 +25,7 @@ class _StudentLoginScreenState extends State<StudentLoginScreen> {
   final _emailController = TextEditingController();
   final _passController = TextEditingController();
   final ScreenMonitorService _monitorService = ScreenMonitorService();
-  String _smsPermissionIssue = '';
+  final String _smsPermissionIssue = '';
   bool _obscure = true;
   bool _loading = false;
 
@@ -40,30 +41,36 @@ class _StudentLoginScreenState extends State<StudentLoginScreen> {
       final data = await StudentAuthService.signIn(email, password);
       final notificationGranted = await _retrieveFcmToken();
       final usageGranted = await _monitorService.hasUsagePermission();
-      final smsGranted = await _requestSmsPermission();
+      // SMS permission is optional - request but don't block login on it
+      unawaited(_requestSmsPermission());
 
-      if (!notificationGranted || !usageGranted || !smsGranted) {
-        await StudentAuthService.signOut(explicit: false);
+      if (data == null) {
         if (!mounted) return;
         setState(() => _loading = false);
-        _showPermissionsRequiredDialog(
-          notificationGranted: notificationGranted,
-          usageGranted: usageGranted,
-          smsGranted: smsGranted,
-        );
+        _showSnack('Student profile not found. Contact administrator.');
         return;
       }
 
-      if (data != null) {
-        try {
-          await AttendanceService.instance.createAttendance(studentData: data);
-        } catch (_) {}
+      // Only block on notification + usage access. SMS is optional.
+      if (!notificationGranted || !usageGranted) {
+        if (mounted) {
+          _showPermissionsRequiredDialog(
+            notificationGranted: notificationGranted,
+            usageGranted: usageGranted,
+            smsGranted: true, // Always pass true so SMS is never shown as required
+          );
+        }
+        // Don't return — proceed with login anyway
       }
+
+      try {
+        await AttendanceService.instance.createAttendance(studentData: data);
+      } catch (_) {}
       if (!mounted) return;
       setState(() => _loading = false);
       Navigator.of(context).pushAndRemoveUntil(
         PageRouteBuilder(
-          pageBuilder: (_, _, _) => StudentShell(studentData: data!),
+          pageBuilder: (_, _, _) => StudentShell(studentData: data),
           transitionsBuilder: (_, anim, _, child) =>
               FadeTransition(opacity: anim, child: child),
           transitionDuration: const Duration(milliseconds: 500),
@@ -119,34 +126,21 @@ class _StudentLoginScreenState extends State<StudentLoginScreen> {
     }
   }
 
-  Future<bool> _requestSmsPermission() async {
-    final current = await Permission.sms.status;
-    if (current.isGranted) {
-      _smsPermissionIssue = '';
-      return true;
+  Future<void> _requestSmsPermission() async {
+    // SMS permission is optional and non-blocking. Request it in background.
+    // If denied, the app continues normally — just offline SMS alerts won't work.
+    try {
+      final current = await Permission.sms.status;
+      if (current.isGranted) {
+        return;
+      }
+      // Only request if not permanently denied (avoid annoying the user)
+      if (!current.isPermanentlyDenied) {
+        await Permission.sms.request();
+      }
+    } catch (_) {
+      // Silently ignore SMS permission errors
     }
-
-    final status = await Permission.sms.request();
-    if (status.isGranted) {
-      _smsPermissionIssue = '';
-      return true;
-    }
-
-    if (status.isRestricted || status.isPermanentlyDenied) {
-      _smsPermissionIssue =
-          'SMS permission is restricted on this device (Android 13+ security).\n\n'
-          'How to fix:\n'
-          '1. In the App Info screen that just opened, tap the 3 dots (⋮) in the top right.\n'
-          '2. Select "Allow restricted settings".\n'
-          '3. Now go to "Permissions" -> "SMS" and select "Allow".\n'
-          '4. Return here and try again.';
-      await openAppSettings();
-      return false;
-    }
-
-    _smsPermissionIssue =
-        'SMS permission denied. Offline admin SMS alert will not work without this.';
-    return false;
   }
 
   void _showPermissionsRequiredDialog({

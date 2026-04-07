@@ -1,10 +1,9 @@
 import 'dart:async';
-import 'dart:convert';
 import 'dart:math';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:geolocator/geolocator.dart';
+import 'package:flutter/foundation.dart';
 
 class AttendanceError implements Exception {
   final String code;
@@ -124,12 +123,7 @@ class SmartAttendanceService {
   final FirebaseFirestore _db = FirebaseFirestore.instance;
   final FirebaseAuth _auth = FirebaseAuth.instance;
 
-  // ❌ QUOTA FIX: Cache classroom polygons to avoid repeated reads
-  final Map<String, String> _polygonCache = {};
-
   static const Duration sessionDuration = Duration(minutes: 10);
-  static const String _defaultClassPolygon =
-      '[[11.055451807408986,78.04807911],[11.055355016363238,78.048391280139057],[11.055254737351877,78.048360760439948],[11.055352400389028,78.048053819466048],[11.05544744745197,78.048081723190947]]';
   static const Map<int, String> _dayNames = {
     DateTime.monday: 'Monday',
     DateTime.tuesday: 'Tuesday',
@@ -206,7 +200,10 @@ class SmartAttendanceService {
 
       for (final periodDoc in periods.docs) {
         final data = periodDoc.data();
-        final monitoringRaw = data['monitoring'] ?? data['montoring'];
+        if (!data.containsKey('monitoring') && data.containsKey('montoring')) {
+          debugPrint('[Attendance] Typo field found in ${periodDoc.id}: montoring. Please migrate to monitoring.');
+        }
+        final monitoringRaw = data['monitoring'];
         final monitoring =
             monitoringRaw == true || monitoringRaw.toString() == 'true';
         final start = (data['startTime'] as num?)?.toInt() ?? 0;
@@ -303,13 +300,15 @@ class SmartAttendanceService {
   }) async {
     await assertAdmin();
 
+    final normalizedPeriod = _normalizePeriodLabel(period);
+
     final user = _auth.currentUser;
     if (user == null) {
       throw AttendanceError('unauthenticated', 'Please login to continue.');
     }
 
     final date = todayDateKey();
-    final sessionDocId = _sessionId(period, date);
+    final sessionDocId = _sessionId(normalizedPeriod, date);
     final sessionRef = _db.collection('attendance_sessions').doc(sessionDocId);
 
     return _db.runTransaction((tx) async {
@@ -354,7 +353,7 @@ class SmartAttendanceService {
       final generatedCode = _randomCode();
 
       tx.set(sessionRef, {
-        'period': period,
+        'period': normalizedPeriod,
         'date': date,
         'code': generatedCode,
         'status': 'active',
@@ -370,7 +369,7 @@ class SmartAttendanceService {
       return AttendanceSession(
         id: sessionDocId,
         code: generatedCode,
-        period: period,
+        period: normalizedPeriod,
         date: date,
         status: 'active',
         isClosed: false,
@@ -387,7 +386,8 @@ class SmartAttendanceService {
     String? date,
   }) {
     final chosenDate = date ?? todayDateKey();
-    final sessionId = _sessionId(period, chosenDate);
+    final normalizedPeriod = _normalizePeriodLabel(period);
+    final sessionId = _sessionId(normalizedPeriod, chosenDate);
 
     return _db
         .collection('attendance_sessions')
@@ -409,53 +409,14 @@ class SmartAttendanceService {
     required String date,
     required String code,
   }) async {
-    final sessionId = _sessionId(period, date);
+    final normalizedPeriod = _normalizePeriodLabel(period);
+    final sessionId = _sessionId(normalizedPeriod, date);
     final doc = await _db.collection('attendance_sessions').doc(sessionId).get();
     if (!doc.exists) return null;
 
     final session = AttendanceSession.fromDoc(doc);
     if (session.code != code) return null;
     return session;
-  }
-
-  Future<String> getClassroomPolygonForPeriod(String period) async {
-    // ❌ QUOTA FIX: Check cache first
-    if (_polygonCache.containsKey(period)) {
-      return _polygonCache[period]!;
-    }
-
-    // Try the simplest approach first: look for doc ID matching period
-    final docById = await _db.collection('classroom_geofences').doc(period).get();
-    if (docById.exists) {
-      final polygon = _extractPolygonRaw(docById.data() ?? {});
-      if (polygon.trim().isNotEmpty) {
-        _polygonCache[period] = polygon;
-        return polygon;
-      }
-    }
-
-    // Try 'default' as fallback
-    final fallback = await _db.collection('classroom_geofences').doc('default').get();
-    if (fallback.exists) {
-      final polygon = _extractPolygonRaw(fallback.data() ?? {});
-      if (polygon.trim().isNotEmpty) {
-        _polygonCache[period] = polygon;
-        return polygon;
-      }
-    }
-
-    // As last resort, try to find first available geofence (only 1 read!)
-    final anyDoc = await _db.collection('classroom_geofences').limit(1).get();
-    if (anyDoc.docs.isNotEmpty) {
-      final polygon = _extractPolygonRaw(anyDoc.docs[0].data());
-      if (polygon.trim().isNotEmpty) {
-        _polygonCache[period] = polygon;
-        return polygon;
-      }
-    }
-
-    _polygonCache[period] = _defaultClassPolygon;
-    return _defaultClassPolygon;
   }
 
   Future<StudentSubmitResult> submitAttendance({
@@ -473,10 +434,11 @@ class SmartAttendanceService {
     }
 
     final date = todayDateKey();
+    final normalizedPeriod = _normalizePeriodLabel(period);
 
     try {
       final session = await getActiveSessionByCode(
-        period: period,
+        period: normalizedPeriod,
         date: date,
         code: code.trim(),
       );
@@ -524,7 +486,7 @@ class SmartAttendanceService {
         );
       }
 
-      final duplicateId = _recordId(user.uid, period, date);
+      final duplicateId = _recordId(user.uid, normalizedPeriod, date);
       final existing =
           await _db.collection('attendance_records').doc(duplicateId).get();
       if (existing.exists) {
@@ -535,20 +497,13 @@ class SmartAttendanceService {
         );
       }
 
-      final inGeofence = await _isStudentInsidePolygon(session.classroomPolygon);
-      if (!inGeofence) {
-        return const StudentSubmitResult(
-          success: false,
-          code: 'outside-classroom',
-          message: 'Outside classroom',
-        );
-      }
+      // Geofence check removed – students can mark attendance from any location
 
       await _db.collection('attendance_records').doc(duplicateId).set({
         'sessionId': session.id,
         'studentUID': user.uid,
         'name': studentName,
-        'period': period,
+        'period': normalizedPeriod,
         'date': date,
         'timestamp': FieldValue.serverTimestamp(),
         'status': 'present',
@@ -583,48 +538,39 @@ class SmartAttendanceService {
     String? date,
   }) {
     final chosenDate = date ?? todayDateKey();
+    final normalizedPeriod = _normalizePeriodLabel(period);
 
-    // Show only logged-in students (attendance collection), then overlay period records.
-    // Keep this stream lightweight to avoid Firestore quota spikes on admin screen.
+    // Show all students, then overlay period records for present/absent status.
     final recordsStream = _db
         .collection('attendance_records')
-        .where('period', isEqualTo: period)
+      .where('period', isEqualTo: normalizedPeriod)
         .where('date', isEqualTo: chosenDate)
         .snapshots()
         .map((snapshot) => snapshot.docs);
 
     return recordsStream.asyncMap((recordDocs) async {
-      final activeOnlineUids = await _activeOnlineSessionUids();
+      final studentSnap = await _db.collection('students').get();
+      final studentNameByUid = <String, String>{};
 
-      final loginDateKey = _legacyDateKeyFromDash(chosenDate);
-      final loginSnap = await _db
-          .collection('attendance')
-          .where('date', isEqualTo: loginDateKey)
-          .get();
-
-      final loggedInUids = <String>{};
-      final loginNameByUid = <String, String>{};
-
-      for (final doc in loginSnap.docs) {
+      for (final doc in studentSnap.docs) {
         final data = doc.data();
-        final uid = (data['studentUID'] ?? '').toString().trim();
+        final uid = (data['uid'] ?? doc.id).toString().trim();
         if (uid.isEmpty) continue;
-        if (!activeOnlineUids.contains(uid)) continue;
 
-        final hasLoggedOut =
-            data.containsKey('logoutTime') && data['logoutTime'] != null;
-        if (hasLoggedOut) continue;
-
-        loggedInUids.add(uid);
-        loginNameByUid[uid] = (data['studentName'] ?? data['name'] ?? 'Student')
-            .toString();
+        final name = (data['name'] ??
+                data['studentName'] ??
+                data['fullName'] ??
+                data['displayName'] ??
+                doc.id)
+            .toString()
+            .trim();
+        studentNameByUid[uid] = name.isEmpty ? 'Student' : name;
       }
 
       final recordByUid = <String, Map<String, dynamic>>{};
-
       for (final record in recordDocs) {
         final data = record.data();
-        final uid = (data['studentUID'] ?? '').toString();
+        final uid = (data['studentUID'] ?? '').toString().trim();
         if (uid.isNotEmpty) {
           recordByUid[uid] = data;
         }
@@ -632,15 +578,20 @@ class SmartAttendanceService {
 
       // Build result rows
       final rows = <StudentAttendanceView>[];
-      for (final uid in loggedInUids) {
-        final name = loginNameByUid[uid] ?? 'Student';
+      final allUids = <String>{
+        ...studentNameByUid.keys,
+        ...recordByUid.keys,
+      };
+
+      for (final uid in allUids) {
         final record = recordByUid[uid];
         final rawTs = record?['timestamp'];
+        final fallbackName = (record?['name'] ?? 'Student').toString();
 
         rows.add(
           StudentAttendanceView(
             uid: uid,
-            name: name,
+            name: studentNameByUid[uid] ?? fallbackName,
             status: (record?['status'] ?? 'absent').toString(),
             timestamp: rawTs is Timestamp ? rawTs.toDate() : null,
             manual: (record?['manual'] ?? false) == true,
@@ -661,12 +612,13 @@ class SmartAttendanceService {
   }) async {
     await assertAdmin();
     final date = todayDateKey();
-    final recordId = _recordId(studentUid, period, date);
+    final normalizedPeriod = _normalizePeriodLabel(period);
+    final recordId = _recordId(studentUid, normalizedPeriod, date);
 
     await _db.collection('attendance_records').doc(recordId).set({
       'studentUID': studentUid,
       'name': studentName,
-      'period': period,
+      'period': normalizedPeriod,
       'date': date,
       'timestamp': FieldValue.serverTimestamp(),
       'status': status,
@@ -684,17 +636,18 @@ class SmartAttendanceService {
     if (statusByStudentUid.isEmpty) return;
 
     final date = todayDateKey();
+    final normalizedPeriod = _normalizePeriodLabel(period);
     final batch = _db.batch();
 
     statusByStudentUid.forEach((studentUid, status) {
-      final recordId = _recordId(studentUid, period, date);
+      final recordId = _recordId(studentUid, normalizedPeriod, date);
       final recordRef = _db.collection('attendance_records').doc(recordId);
       final name = nameByStudentUid[studentUid] ?? 'Student';
 
       batch.set(recordRef, {
         'studentUID': studentUid,
         'name': name,
-        'period': period,
+        'period': normalizedPeriod,
         'date': date,
         'timestamp': FieldValue.serverTimestamp(),
         'status': status,
@@ -719,11 +672,12 @@ class SmartAttendanceService {
   }) async {
     await assertAdmin();
     final chosenDate = date ?? todayDateKey();
+    final normalizedPeriod = _normalizePeriodLabel(period);
 
     try {
       final sessionRef = _db
           .collection('attendance_sessions')
-          .doc(_sessionId(period, chosenDate));
+          .doc(_sessionId(normalizedPeriod, chosenDate));
       final sessionDoc = await sessionRef.get();
       if (sessionDoc.exists) {
         final session = AttendanceSession.fromDoc(sessionDoc);
@@ -737,7 +691,7 @@ class SmartAttendanceService {
 
       final records = await _db
           .collection('attendance_records')
-          .where('period', isEqualTo: period)
+          .where('period', isEqualTo: normalizedPeriod)
           .where('date', isEqualTo: chosenDate)
           .get();
 
@@ -773,11 +727,11 @@ class SmartAttendanceService {
 
         final recordRef = _db
             .collection('attendance_records')
-            .doc(_recordId(uid, period, chosenDate));
+            .doc(_recordId(uid, normalizedPeriod, chosenDate));
         batch.set(recordRef, {
           'studentUID': uid,
           'name': (login['studentName'] ?? login['name'] ?? 'Student').toString(),
-          'period': period,
+          'period': normalizedPeriod,
           'date': chosenDate,
           'timestamp': FieldValue.serverTimestamp(),
           'status': 'absent',
@@ -788,7 +742,7 @@ class SmartAttendanceService {
       }
 
       batch.set(sessionRef, {
-        'period': period,
+        'period': normalizedPeriod,
         'date': chosenDate,
         'status': 'closed',
         'isClosed': true,
@@ -817,205 +771,6 @@ class SmartAttendanceService {
     );
   }
 
-  Future<bool> _isStudentInsidePolygon(String polygonRaw) async {
-    final points = _parsePolygon(polygonRaw);
-    if (points.length < 3) {
-      throw AttendanceError(
-        'geofence-missing',
-        'Classroom polygon is not configured correctly.',
-      );
-    }
 
-    final swappedPoints = points
-        .map((p) => _LatLng(p.lng, p.lat))
-        .toList(growable: false);
-
-    final permission = await _ensureLocationPermission();
-    if (!permission) {
-      throw AttendanceError('gps-denied', 'GPS permission denied');
-    }
-
-    if (!await Geolocator.isLocationServiceEnabled()) {
-      throw AttendanceError('gps-disabled', 'Please enable location services');
-    }
-
-    Position position;
-    try {
-      position = await Geolocator.getCurrentPosition(
-        locationSettings: const LocationSettings(
-          accuracy: LocationAccuracy.high,
-          timeLimit: Duration(seconds: 12),
-        ),
-      );
-    } on TimeoutException {
-      throw AttendanceError('gps-timeout', 'Unable to get GPS location in time');
-    }
-
-    final insideDirect = _pointInPolygon(
-      position.latitude,
-      position.longitude,
-      points,
-    );
-    if (insideDirect) return true;
-
-    // Support Firestore polygons stored as [lng, lat] by trying swapped coords.
-    return _pointInPolygon(
-      position.latitude,
-      position.longitude,
-      swappedPoints,
-    );
-  }
-
-  Future<bool> _ensureLocationPermission() async {
-    var permission = await Geolocator.checkPermission();
-    if (permission == LocationPermission.denied) {
-      permission = await Geolocator.requestPermission();
-    }
-
-    if (permission == LocationPermission.denied) return false;
-    if (permission == LocationPermission.deniedForever) return false;
-
-    return true;
-  }
-
-  List<_LatLng> _parsePolygon(String raw) {
-    final trimmed = raw.trim();
-    if (trimmed.isEmpty) return const [];
-
-    try {
-      final decoded = jsonDecode(trimmed);
-      final out = _extractCoordinates(decoded);
-      if (out.isNotEmpty) return out;
-    } catch (_) {
-      // Supports fallback plain-text polygon formats.
-    }
-
-    final out = <_LatLng>[];
-    final chunks = trimmed.split(';');
-    for (final chunk in chunks) {
-      final pair = chunk.split(',');
-      if (pair.length < 2) continue;
-      final lat = double.tryParse(pair[0].trim());
-      final lng = double.tryParse(pair[1].trim());
-      if (lat != null && lng != null) {
-        out.add(_LatLng(lat, lng));
-      }
-    }
-
-    return out;
-  }
-
-  String _extractPolygonRaw(Map<String, dynamic> data) {
-    const candidateKeys = <String>[
-      'polygon',
-      'geojson',
-      'geoJson',
-      'classroomPolygon',
-      'geometry',
-      'coordinates',
-    ];
-
-    for (final key in candidateKeys) {
-      if (!data.containsKey(key)) continue;
-      final normalized = _normalizePolygonValue(data[key]);
-      if (normalized.isNotEmpty) return normalized;
-    }
-
-    return '';
-  }
-
-  String _normalizePolygonValue(dynamic value) {
-    if (value == null) return '';
-    if (value is String) return value.trim();
-
-    try {
-      return jsonEncode(value);
-    } catch (_) {
-      return value.toString().trim();
-    }
-  }
-
-  List<_LatLng> _extractCoordinates(dynamic source) {
-    if (source is List && source.isNotEmpty && source.first is num) {
-      // Single pair like [lat, lng] or [lng, lat] is not a polygon.
-      return const [];
-    }
-
-    if (source is List) {
-      final directPairs = <_LatLng>[];
-      var allPairs = true;
-      for (final item in source) {
-        if (item is List && item.length >= 2 && item[0] is num && item[1] is num) {
-          directPairs.add(_LatLng((item[0] as num).toDouble(), (item[1] as num).toDouble()));
-        } else {
-          allPairs = false;
-          break;
-        }
-      }
-      if (allPairs && directPairs.length >= 3) return directPairs;
-
-      // Nested list (Polygon rings / MultiPolygon): use first valid ring.
-      for (final item in source) {
-        final extracted = _extractCoordinates(item);
-        if (extracted.length >= 3) return extracted;
-      }
-      return const [];
-    }
-
-    if (source is Map) {
-      final map = source.cast<String, dynamic>();
-
-      final lat = map['lat'];
-      final lng = map['lng'];
-      if (lat is num && lng is num) {
-        return [_LatLng(lat.toDouble(), lng.toDouble())];
-      }
-
-      final features = map['features'];
-      if (features != null) {
-        final extracted = _extractCoordinates(features);
-        if (extracted.length >= 3) return extracted;
-      }
-
-      final geometry = map['geometry'];
-      if (geometry != null) {
-        final extracted = _extractCoordinates(geometry);
-        if (extracted.length >= 3) return extracted;
-      }
-
-      final coordinates = map['coordinates'];
-      if (coordinates != null) {
-        final extracted = _extractCoordinates(coordinates);
-        if (extracted.length >= 3) return extracted;
-      }
-    }
-
-    return const [];
-  }
-
-  bool _pointInPolygon(double lat, double lng, List<_LatLng> polygon) {
-    var inside = false;
-    var j = polygon.length - 1;
-
-    for (var i = 0; i < polygon.length; i++) {
-      final yi = polygon[i].lat;
-      final xi = polygon[i].lng;
-      final yj = polygon[j].lat;
-      final xj = polygon[j].lng;
-
-      final intersects = ((yi > lat) != (yj > lat)) &&
-          (lng < (xj - xi) * (lat - yi) / ((yj - yi) + 0.00000001) + xi);
-      if (intersects) inside = !inside;
-      j = i;
-    }
-
-    return inside;
-  }
 }
 
-class _LatLng {
-  final double lat;
-  final double lng;
-
-  const _LatLng(this.lat, this.lng);
-}

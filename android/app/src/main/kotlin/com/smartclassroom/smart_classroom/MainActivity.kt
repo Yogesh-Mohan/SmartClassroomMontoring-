@@ -78,6 +78,14 @@ class MainActivity : FlutterActivity() {
                     result.success(null)
                 }
 
+                "setStudentIdentity" -> {
+                    val name = call.argument<String>("studentName") ?: "Student"
+                    val regNo = call.argument<String>("regNo") ?: ""
+                    MonitoringService.studentNameForAlerts = name.trim().ifEmpty { "Student" }
+                    MonitoringService.studentRegNoForAlerts = regNo.trim()
+                    result.success(null)
+                }
+
                 else -> result.notImplemented()
             }
         }

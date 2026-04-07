@@ -60,9 +60,10 @@ class Period {
 
     final startMinutes = parseMinutes(data['startTime']);
     final endMinutes = parseMinutes(data['endTime']);
-    final monitoringRaw = data.containsKey('monitoring')
-        ? data['monitoring']
-        : data['montoring'];
+    if (!data.containsKey('monitoring') && data.containsKey('montoring')) {
+      debugPrint('[PeriodModel] Typo field found in ${doc.id}: montoring. Please migrate to monitoring.');
+    }
+    final monitoringRaw = data['monitoring'];
     final breakRaw = data.containsKey('isBreak') ? data['isBreak'] : data['break'];
     final subject = (data['subject'] ?? data['name'] ?? doc.id).toString();
     final room = (data['room'] ?? data['classRoom'] ?? data['location'] ?? 'N/A').toString();

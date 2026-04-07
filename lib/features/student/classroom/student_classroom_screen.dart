@@ -119,7 +119,10 @@ class _StudentClassroomScreenState extends State<StudentClassroomScreen> {
       final periods = <String>{};
       for (final doc in snap.docs) {
         final data = doc.data();
-        final monitoringRaw = data['monitoring'] ?? data['montoring'];
+        if (!data.containsKey('monitoring') && data.containsKey('montoring')) {
+          debugPrint('[StudentClassroom] Typo field found in ${doc.id}: montoring. Please migrate to monitoring.');
+        }
+        final monitoringRaw = data['monitoring'];
         final isClass = monitoringRaw == true || monitoringRaw == 'true';
         if (!isClass) continue;
         periods.add(_normalizePeriodKey(doc.id));
@@ -773,7 +776,10 @@ class _StudentDayScheduleScreenState extends State<StudentDayScheduleScreen> {
 
     final entries = snap.docs.map((doc) {
       final data = doc.data();
-      final monitoringRaw = data['monitoring'] ?? data['montoring'];
+      if (!data.containsKey('monitoring') && data.containsKey('montoring')) {
+        debugPrint('[StudentClassroom] Typo field found in ${doc.id}: montoring. Please migrate to monitoring.');
+      }
+      final monitoringRaw = data['monitoring'];
       final isClass = monitoringRaw == true || monitoringRaw == 'true';
       final start = (data['startTime'] as num?)?.toInt() ?? 0;
       final end = (data['endTime'] as num?)?.toInt() ?? 0;

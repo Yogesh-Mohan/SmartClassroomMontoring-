@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 /// LiveMonitoringService — Pushes real-time student phone activity to Firestore.
 ///
@@ -45,8 +46,9 @@ class LiveMonitoringService {
   String _status = 'active'; // active | idle | offline
   String _mode = 'active'; // active | passive | sleep
 
-  // Violation dedup — prevents multiple violation docs for the same session
+  // Violation dedup — persists by day + period to avoid duplicates after app restart.
   bool _violationSentThisSession = false;
+  String _lastViolationPeriod = '';
 
   // Admin master switch
   StreamSubscription<DocumentSnapshot>? _adminSettingsListener;
@@ -125,6 +127,7 @@ class LiveMonitoringService {
             _currentApp = '';
             _mode = 'passive';
             _violationSentThisSession = false;
+            _lastViolationPeriod = '';
             await _pushToFirestore(force: true); // push zeroed state right now
           } else {
             // Re-enabled: update status to active immediately so students appear active
@@ -132,6 +135,7 @@ class LiveMonitoringService {
             _status = 'active';
             _mode = 'active';
             _violationSentThisSession = false;
+            _lastViolationPeriod = '';
             await _pushToFirestore(force: true);
           }
         });
@@ -164,6 +168,10 @@ class LiveMonitoringService {
   }
 
   void updateCurrentPeriod(String period) {
+    if (_currentPeriod != period) {
+      _violationSentThisSession = false;
+      _lastViolationPeriod = '';
+    }
     _currentPeriod = period;
   }
 
@@ -182,9 +190,33 @@ class LiveMonitoringService {
   /// Returns true if a violation has already been recorded for this session.
   bool get violationSentThisSession => _violationSentThisSession;
 
-  /// Mark that a violation was already sent for this session.
-  void markViolationSent() {
+  Future<bool> hasViolationForPeriod(String period) async {
+    if (_violationSentThisSession && _lastViolationPeriod == period) {
+      return true;
+    }
+
+    if (_studentUID.isEmpty || period.trim().isEmpty) {
+      return false;
+    }
+
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getBool(_dedupKey(period)) ?? false;
+  }
+
+  Future<void> markViolationSent(String period) async {
     _violationSentThisSession = true;
+    _lastViolationPeriod = period;
+    if (_studentUID.isEmpty || period.trim().isEmpty) return;
+
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_dedupKey(period), true);
+  }
+
+  String _dedupKey(String period) {
+    final now = DateTime.now();
+    final day =
+        '${now.year}_${now.month.toString().padLeft(2, '0')}_${now.day.toString().padLeft(2, '0')}';
+    return 'violation_dedup_${_studentUID}_${period.trim()}_$day';
   }
 
   /// Reset the violation flag (e.g. when app changes or timer resets).
@@ -204,7 +236,13 @@ class LiveMonitoringService {
     }
 
     _lastRealtimeSyncAt = now;
-    unawaited(_pushToFirestore(force: true));
+    _fireAndForgetRealtimePush();
+  }
+
+  void _fireAndForgetRealtimePush() {
+    _pushToFirestore(force: true).catchError((e) {
+      debugPrint('[LiveMonitor] Realtime push failed: $e');
+    });
   }
 
   // ── Firestore push ────────────────────────────────────────────────────────

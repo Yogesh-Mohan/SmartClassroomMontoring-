@@ -2,6 +2,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'alert_delivery_service.dart';
 import 'live_monitoring_service.dart';
 import 'notification_service.dart';
@@ -29,10 +30,21 @@ class ScreenMonitorService {
   final AlertDeliveryService _alertDeliveryService =
       AlertDeliveryService.instance;
 
+  static const String _cachedAdminPhoneKey = 'cached_admin_phone_v1';
+
   /// Fetch admin phone number from Firestore.
   /// Reads from `admins` collection → `phone` field (as shown in Firebase).
   /// Fallback: also tries `monitoring_settings/global` → `adminPhone`.
   Future<String> _fetchAdminPhone() async {
+    final prefs = await SharedPreferences.getInstance();
+    final cached = (prefs.getString(_cachedAdminPhoneKey) ?? '').trim();
+    final cachedFormatted = _normalizePhone(cached);
+
+    // Keep cached value as fallback, but still try fresh network fetch.
+    if (cached.isNotEmpty) {
+      debugPrint('[Monitor] Cached admin phone available: $cachedFormatted');
+    }
+
     // ── Primary: read from admins collection (phone field) ──────────────────
     try {
       final adminsSnap = await FirebaseFirestore.instance
@@ -43,8 +55,8 @@ class ScreenMonitorService {
       for (final doc in adminsSnap.docs) {
         final phone = (doc.data()['phone'] ?? '').toString().trim();
         if (phone.isNotEmpty) {
-          // Ensure number starts with + for international format
-          final formatted = phone.startsWith('+') ? phone : '+91$phone';
+          final formatted = _normalizePhone(phone);
+          await prefs.setString(_cachedAdminPhoneKey, formatted);
           debugPrint('[Monitor] Admin phone found in admins collection: $formatted');
           return formatted;
         }
@@ -62,7 +74,8 @@ class ScreenMonitorService {
 
       final phone = (globalDoc.data()?['adminPhone'] ?? '').toString().trim();
       if (phone.isNotEmpty) {
-        final formatted = phone.startsWith('+') ? phone : '+91$phone';
+        final formatted = _normalizePhone(phone);
+        await prefs.setString(_cachedAdminPhoneKey, formatted);
         debugPrint('[Monitor] Admin phone found in monitoring_settings: $formatted');
         return formatted;
       }
@@ -70,8 +83,20 @@ class ScreenMonitorService {
       debugPrint('[Monitor] monitoring_settings phone fetch failed: $e');
     }
 
+    if (cached.isNotEmpty) {
+      debugPrint('[Monitor] Using cached admin phone as fallback: $cachedFormatted');
+      return cachedFormatted;
+    }
+
     debugPrint('[Monitor] ⚠️ No admin phone found in any collection');
     return '';
+  }
+
+  String _normalizePhone(String raw) {
+    final value = raw.trim();
+    if (value.isEmpty) return '';
+    if (value.startsWith('+')) return value;
+    return value.replaceAll(RegExp(r'[^0-9]'), '');
   }
 
   /// Handle calls FROM native → Flutter
@@ -81,13 +106,14 @@ class ScreenMonitorService {
       final secondsUsed = (args['secondsUsed'] as num?)?.toInt() ?? 20;
       final period = (args['period'] as String?) ?? 'Unknown';
 
-      if (_liveMonitor.violationSentThisSession) {
+      final alreadySent = await _liveMonitor.hasViolationForPeriod(period);
+      if (alreadySent) {
         debugPrint('[Monitor] Duplicate violation suppressed for this session');
         return;
       }
 
       await _saveViolationToFirestore(secondsUsed: secondsUsed, period: period);
-      _liveMonitor.markViolationSent();
+      await _liveMonitor.markViolationSent(period);
     } else if (call.method == 'onLiveUpdate') {
       final args = Map<String, dynamic>.from(call.arguments as Map);
       final currentApp = (args['currentApp'] as String?) ?? '';
@@ -166,6 +192,11 @@ class ScreenMonitorService {
     await NotificationService().requestPermissions();
 
     try {
+      await _channel.invokeMethod('setStudentIdentity', {
+        'studentName': studentName,
+        'regNo': regNo,
+      });
+
       final result = await _channel.invokeMethod<bool>('startMonitoring');
       _isMonitoring = result ?? false;
       debugPrint('[Monitor] Native service started: $_isMonitoring');
@@ -190,6 +221,13 @@ class ScreenMonitorService {
           studentName: studentName,
           regNo: regNo,
         );
+
+        // Flush offline FCM alerts when app is opened and internet is back.
+        try {
+          await _alertDeliveryService.syncPendingAlertsNow();
+        } catch (e) {
+          debugPrint('[Monitor] Pending alert sync failed: $e');
+        }
       }
 
       return _isMonitoring;

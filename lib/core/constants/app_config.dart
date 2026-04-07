@@ -7,12 +7,12 @@ class AppConfig {
 
   /// Backend server base URL
   /// 
-  /// Default: Firebase Functions or local backend
+  /// Default: Render production backend
   /// Override via environment variable: BACKEND_URL
   static const String backendBaseUrl = 
       String.fromEnvironment(
         'BACKEND_URL',
-        defaultValue: 'http://localhost:5000', // Development default
+        defaultValue: 'https://smartclassroommontoring-system.onrender.com', // Production Render backend
       );
 
   /// Backend notification endpoints

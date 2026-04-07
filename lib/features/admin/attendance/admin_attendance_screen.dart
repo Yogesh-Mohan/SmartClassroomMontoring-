@@ -110,11 +110,10 @@ class _AdminAttendanceScreenState extends State<AdminAttendanceScreen> {
     });
 
     try {
-      final polygon = await _service.getClassroomPolygonForPeriod(period);
-
+      // Geofence polygon no longer required for attendance
       final session = await _service.startOrReuseSession(
         period: period,
-        classroomPolygon: polygon,
+        classroomPolygon: '',
       );
 
       setState(() {

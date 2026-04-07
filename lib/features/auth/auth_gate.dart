@@ -1,10 +1,8 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../../core/theme/app_gradients.dart';
-import '../../services/monitor_service.dart';
 import '../advisor/advisor_dashboard.dart';
 import '../admin/admin_shell.dart';
 import '../role_select/role_select_screen.dart';
@@ -24,7 +22,6 @@ class AuthGate extends StatefulWidget {
 
 class _AuthGateState extends State<AuthGate> {
   late final Future<Widget> _initialScreenFuture;
-  final ScreenMonitorService _monitorService = ScreenMonitorService();
 
   @override
   void initState() {
@@ -45,11 +42,6 @@ class _AuthGateState extends State<AuthGate> {
         final role = roleProfile['role'];
         final data = roleProfile['data'] as Map<String, dynamic>;
         if (role == 'student') {
-          final allowed = await _hasRequiredStudentPermissions();
-          if (!allowed) {
-            await FirebaseAuth.instance.signOut().catchError((_) {});
-            return const RoleSelectScreen();
-          }
           return StudentShell(studentData: data);
         }
         if (role == 'admin') {
@@ -73,11 +65,6 @@ class _AuthGateState extends State<AuthGate> {
 
       final studentData = await _fetchStudentProfile(email, user.uid);
       if (studentData != null) {
-        final allowed = await _hasRequiredStudentPermissions();
-        if (!allowed) {
-          await FirebaseAuth.instance.signOut().catchError((_) {});
-          return const RoleSelectScreen();
-        }
         return StudentShell(studentData: studentData);
       }
 
@@ -163,23 +150,7 @@ class _AuthGateState extends State<AuthGate> {
     }
   }
 
-  Future<bool> _hasRequiredStudentPermissions() async {
-    try {
-      final usageGranted = await _monitorService.hasUsagePermission();
-      if (!usageGranted) return false;
 
-      final notificationSettings =
-          await FirebaseMessaging.instance.getNotificationSettings();
-      final notificationGranted =
-          notificationSettings.authorizationStatus ==
-              AuthorizationStatus.authorized ||
-          notificationSettings.authorizationStatus ==
-              AuthorizationStatus.provisional;
-      return notificationGranted;
-    } catch (_) {
-      return false;
-    }
-  }
 
   @override
   Widget build(BuildContext context) {

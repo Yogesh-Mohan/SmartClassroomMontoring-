@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Grand Master Prototype V3 - Pure White Edition</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/tween.js/18.6.4/tween.umd.js"></script>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #f8f9fa; font-family: 'Segoe UI', sans-serif; color: #2c3e50; }
+        #sidebar {
+            position: absolute; left: 0; top: 0; bottom: 0; width: 300px;
+            background: rgba(255, 255, 255, 0.8); backdrop-filter: blur(25px);
+            border-right: 1px solid rgba(0, 0, 0, 0.05); padding: 40px 25px; z-index: 100;
+        }
+        h2 { color: #2980b9; text-transform: uppercase; letter-spacing: 5px; font-size: 1rem; margin-bottom: 30px; font-weight: 900; }
+        .btn {
+            display: block; width: 100%; padding: 15px; margin-bottom: 20px;
+            background: rgba(255, 255, 255, 0.9); border: 1px solid rgba(41, 128, 185, 0.3);
+            color: #2980b9; font-weight: 800; cursor: pointer; transition: 0.4s;
+            text-transform: uppercase; font-size: 0.7rem; border-radius: 8px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.05);
+        }
+        .btn:hover { background: #2980b9; color: white; box-shadow: 0 10px 20px rgba(41, 128, 185, 0.2); }
+        .btn.alert { border-color: #e74c3c; color: #e74c3c; }
+        .btn.alert:hover { background: #e74c3c; color: white; box-shadow: 0 10px 20px rgba(231, 76, 60, 0.2); }
+        #system-log {
+            position: absolute; bottom: 30px; left: 330px; padding: 20px;
+            background: rgba(255,255,255,0.9); border-radius: 12px; font-family: monospace;
+            font-size: 0.75rem; color: #34495e; max-width: 400px; border-left: 5px solid #2980b9;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.1);
+        }
+    </style>
+</head>
+<body>
+    <div id="sidebar">
+        <h2>GRAND MASTER<br>WHITE V3</h2>
+        <div class="control-group">
+            <button class="btn" onclick="startTour()">Cinematic Tour</button>
+            <button class="btn" onclick="resetCamera()">Reset View</button>
+            <p style="font-size:0.6rem; opacity:0.4; margin-top:30px; color:#7f8c8d;">SCENARIO CONTROL</p>
+            <button class="btn alert" onclick="triggerViolation()">Trigger Violation</button>
+        </div>
+    </div>
+
+    <div id="system-log">
+        [BOOT] LOADING PURE WHITE THEME...<br>
+        [BOOT] LIGHTING: HIGH BALANCED STUDIO<br>
+        [STAT] ALL NODES OPERATIONAL
+    </div>
+
+    <script>
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0xf8f9fa);
+        scene.fog = new THREE.Fog(0xf8f9fa, 50, 200);
+
+        const camera = new THREE.PerspectiveCamera(35, window.innerWidth / window.innerHeight, 0.1, 1000);
+        camera.position.set(80, 50, 80);
+
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.shadowMap.enabled = true;
+        renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+        document.body.appendChild(renderer.domElement);
+
+        const controls = new THREE.OrbitControls(camera, renderer.domElement);
+        controls.enableDamping = true;
+
+        // --- STUDIO LIGHTING ---
+        scene.add(new THREE.AmbientLight(0xffffff, 0.7));
+        const sun = new THREE.DirectionalLight(0xffffff, 0.8);
+        sun.position.set(40, 60, 40); sun.castShadow = true;
+        sun.shadow.mapSize.set(2048, 2048);
+        scene.add(sun);
+        const rim = new THREE.PointLight(0xffffff, 0.5);
+        rim.position.set(-20, 40, -20); scene.add(rim);
+
+        // --- MATERIALS ---
+        const floorMat = new THREE.MeshPhysicalMaterial({ color: 0xffffff, roughness: 0.1, metalness: 0.1, clearcoat: 0.8 });
+        const wallMat = new THREE.MeshPhysicalMaterial({ color: 0xffffff, roughness: 0.8 });
+        const deskMat = new THREE.MeshPhysicalMaterial({ color: 0xe0e0e0, roughness: 0.3 });
+        const chairMat = new THREE.MeshPhysicalMaterial({ color: 0xbdc3c7, roughness: 0.6 });
+        const skinMat = new THREE.MeshPhysicalMaterial({ color: 0xffdbac, roughness: 0.4 });
+        const uniformMat = new THREE.MeshPhysicalMaterial({ color: 0x2980b9, roughness: 0.8 });
+
+        // --- LAYER 1: CLASSROOM ---
+        const classroom = new THREE.Group();
+        const base = new THREE.Mesh(new THREE.BoxGeometry(45, 0.5, 35), floorMat);
+        base.receiveShadow = true; classroom.add(base);
+        
+        const bWall = new THREE.Mesh(new THREE.BoxGeometry(45, 15, 0.5), wallMat);
+        bWall.position.set(0, 7.5, -17.5); classroom.add(bWall);
+        const sWall = new THREE.Mesh(new THREE.BoxGeometry(0.5, 15, 35), wallMat);
+        sWall.position.set(-22.5, 7.5, 0); classroom.add(sWall);
+        
+        const board = new THREE.Mesh(new THREE.PlaneGeometry(12, 6.5), new THREE.MeshStandardMaterial({ color: 0xfdfdfd }));
+        board.position.set(0, 8, -17.2); classroom.add(board);
+
+        const characters = [];
+        function createDesk(x, z, id, isV) {
+            const grp = new THREE.Group();
+            const d = new THREE.Mesh(new THREE.BoxGeometry(4.5, 0.2, 2.5), deskMat); d.position.y = 3.5; d.castShadow = true; grp.add(d);
+            const legs = new THREE.Mesh(new THREE.BoxGeometry(0.1, 3.5, 2.3), chairMat); legs.position.set(2, 1.75, 0); grp.add(legs);
+            const legs2 = legs.clone(); legs2.position.x = -2; grp.add(legs2);
+            
+            const per = new THREE.Group();
+            per.add(new THREE.Mesh(new THREE.CylinderGeometry(0.6, 0.7, 1.5), uniformMat));
+            const h = new THREE.Mesh(new THREE.SphereGeometry(0.45, 16, 16), skinMat); h.position.y = 1.1; per.add(h);
+            const hair = new THREE.Mesh(new THREE.SphereGeometry(0.48, 12, 12), new THREE.MeshStandardMaterial({ color: 0x2c3e50 }));
+            hair.position.y = 1.25; hair.scale.y = 0.5; per.add(hair);
+            per.position.set(0, 3.2, 1.5); grp.add(per);
+
+            const r = new THREE.Mesh(new THREE.TorusGeometry(3.5, 0.1, 16, 100), new THREE.MeshBasicMaterial({ color: 0xe74c3c, transparent: true, opacity: 0 }));
+            r.rotation.x = Math.PI / 2; r.position.y = 0.3; grp.add(r);
+
+            if(isV) { h.rotation.x = 0.6; grp.isViolator = true; classroom.v = grp; }
+            grp.position.set(x, 0.01, z); classroom.add(grp);
+            characters.push({ per, h, r, seed: Math.random()*10 });
+        }
+        for(let r=0; r<2; r++) for(let c=0; c<4; c++) createDesk(c*10 - 15, r*10 - 5, c*r, r==1 && c==1);
+        scene.add(classroom);
+
+        // --- LAYER 2: CLOUD (MIDDLE) ---
+        const cloudY = 30;
+        const cloud = new THREE.Mesh(new THREE.TorusKnotGeometry(2, 0.5, 100, 16), new THREE.MeshPhysicalMaterial({ color: 0x3498db, transparent: true, opacity: 0.2, transmission: 1 }));
+        cloud.position.y = cloudY; scene.add(cloud);
+
+        // --- LAYER 3: ADMIN PHONE (TOP) ---
+        const adminY = 60;
+        const phoneS = new THREE.Shape(); const w = 4, h = 8, rad = 0.5;
+        phoneS.moveTo(-w/2 + rad, -h/2); phoneS.lineTo(w/2 - rad, -h/2); phoneS.quadraticCurveTo(w/2, -h/2, w/2, -h/2 + rad);
+        phoneS.lineTo(w/2, h/2 - rad); phoneS.quadraticCurveTo(w/2, h/2, w/2 - rad, h/2); phoneS.lineTo(-w/2 + rad, h/2);
+        phoneS.quadraticCurveTo(-w/2, h/2, -w/2, h/2 - rad); phoneS.lineTo(-w/2, -h/2 + rad); phoneS.quadraticCurveTo(-w/2, -h/2, -w/2 + rad, -h/2);
+        
+        const adminUI = new THREE.Group();
+        const pBody = new THREE.Mesh(new THREE.ExtrudeGeometry(phoneS, { depth: 0.4, bevelEnabled: true, bevelThickness: 0.1, bevelSize: 0.1 }), new THREE.MeshPhysicalMaterial({ color: 0xffffff, metalness: 0.3, roughness: 0.1, clearcoat: 1 }));
+        adminUI.add(pBody);
+
+        const uiCanvas = document.createElement('canvas'); uiCanvas.width = 512; uiCanvas.height = 1024;
+        const uiCtx = uiCanvas.getContext('2d');
+        function drawUI(alert = false) {
+            uiCtx.fillStyle = '#f8f9fa'; uiCtx.fillRect(0,0,512,1024);
+            uiCtx.fillStyle = '#2980b9'; uiCtx.font = 'bold 50px Segoe UI'; uiCtx.fillText('STATUS HUD', 60, 120);
+            for(let i=0; i<8; i++){
+                const x = 60 + (i%2)*200, y = 200 + Math.floor(i/2)*140;
+                uiCtx.strokeStyle = (alert && i===3) ? '#e74c3c' : '#bdc3c7'; uiCtx.strokeRect(x,y,180,120);
+                uiCtx.fillStyle = (alert && i===3) ? '#e74c3c' : '#2980b9'; uiCtx.fillText(`S${i+1}`, x+30, y+60);
+            }
+            if(alert) { uiCtx.fillStyle = '#e74c3c'; uiCtx.fillRect(0,400,512,250); uiCtx.fillStyle='white'; uiCtx.fillText('ALERT Node 4', 100, 550); }
+        }
+        drawUI();
+        const scT = new THREE.CanvasTexture(uiCanvas);
+        const scM = new THREE.Mesh(new THREE.PlaneGeometry(3.9, 7.9), new THREE.MeshStandardMaterial({ map: scT }));
+        scM.position.z = 0.46; adminUI.add(scM);
+        adminUI.position.y = adminY; adminUI.rotation.x = -Math.PI/4; scene.add(adminUI);
+
+        // --- LOGIC ---
+        const lines = [];
+        window.triggerViolation = function() {
+            log("DETECTING Violation...");
+            const v = classroom.v; v.children[4].material.opacity = 1;
+            const b = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.2, 100), new THREE.MeshBasicMaterial({ color: 0xe74c3c, transparent:true, opacity:0.3 }));
+            b.position.copy(v.position); b.position.y = 50; scene.add(b);
+            setTimeout(() => { createF(v.position, new THREE.Vector3(0, cloudY, 0), 0x3498db); }, 500);
+            setTimeout(() => { createF(new THREE.Vector3(0, cloudY, 0), new THREE.Vector3(0, adminY, 0), 0x2ecc71); }, 2000);
+            setTimeout(() => { log("ADMIN NOTIFIED."); drawUI(true); scT.needsUpdate=true; setTimeout(()=>{drawUI(false); scT.needsUpdate=true; b.visible=false; v.children[4].material.opacity=0;},4000); }, 3500);
+        }
+        function createF(p1, p2, col) {
+            const curve = new THREE.QuadraticBezierCurve3(p1, new THREE.Vector3((p1.x+p2.x)/2, (p1.y+p2.y)/2+20, (p1.z+p2.z)/2), p2);
+            const p = new THREE.Mesh(new THREE.SphereGeometry(0.5), new THREE.MeshBasicMaterial({ color: col })); scene.add(p);
+            lines.push({ curve, p, prog: 0 });
+        }
+        window.startTour = () => {
+            const steps = [{p:[80,50,80],t:[0,30,0]},{p:[-15,12,-15],t:[-15,3,-5]},{p:[0,40,30],t:[0,30,0]},{p:[0,70,20],t:[0,60,0]}];
+            let i=0; function next(){ if(i>=steps.length) return; const s=steps[i++]; new TWEEN.Tween(camera.position).to({x:s.p[0], y:s.p[1], z:s.p[2]},2500).easing(TWEEN.Easing.Quadratic.InOut).start(); new TWEEN.Tween(controls.target).to({x:s.t[0], y:s.t[1], z:s.t[2]},2500).start(); setTimeout(next,4000); if(i==2) triggerViolation(); } next();
+        }
+        window.resetCamera = () => { new TWEEN.Tween(camera.position).to({x:80,y:50,z:80},1000).start(); new TWEEN.Tween(controls.target).to({x:0,y:30,z:0},1000).start(); }
+        function log(m) { const d=document.getElementById('system-log'); d.innerHTML += `<br>[SYS] ${m}`; d.scrollTop=d.scrollHeight; }
+        function animate() {
+            requestAnimationFrame(animate); TWEEN.update(); const t=Date.now()*0.001;
+            characters.forEach(c => { c.per.position.y=3.2+Math.sin(t*2+c.seed)*0.05; c.h.rotation.y=Math.sin(t*0.5+c.seed)*0.2; });
+            lines.forEach(l => { l.prog+=0.01; if(l.prog>1)l.prog=0; l.p.position.copy(l.curve.getPoint(l.prog)); });
+            cloud.rotation.y+=0.01; cloud.position.y=30+Math.sin(t); controls.update(); renderer.render(scene, camera);
+        }
+        animate();
+        window.addEventListener('resize', () => { camera.aspect=window.innerWidth/window.innerHeight; camera.updateProjectionMatrix(); renderer.setSize(window.innerWidth, window.innerHeight); });
+    </script>
+</body>
+</html>

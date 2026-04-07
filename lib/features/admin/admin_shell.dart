@@ -241,7 +241,11 @@ class _AdminShellState extends State<AdminShell> {
   static const _navItems = [
     _NavItem(Icons.dashboard_rounded, Icons.dashboard_outlined, 'Dashboard'),
     _NavItem(Icons.how_to_reg_rounded, Icons.how_to_reg_outlined, 'Attendance'),
-    _NavItem(Icons.insights_rounded, Icons.insights_outlined, 'Insights'),
+    _NavItem(
+      Icons.workspace_premium_rounded,
+      Icons.workspace_premium_outlined,
+      'Certificates',
+    ),
     _NavItem(
       Icons.monitor_heart_rounded,
       Icons.monitor_heart_outlined,

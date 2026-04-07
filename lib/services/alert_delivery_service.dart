@@ -4,9 +4,7 @@ import 'dart:io';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/foundation.dart';
-import 'package:flutter_sms/flutter_sms.dart';
 import 'package:http/http.dart' as http;
-import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../core/constants/app_config.dart';
@@ -16,8 +14,7 @@ class AlertDeliveryService {
   static final AlertDeliveryService instance = AlertDeliveryService._();
 
   static String get _notifyAdminsUrl => AppConfig.notifyAdminsEndpoint;
-  static const _retryQueueKey = 'pending_sms_alerts_v1';
-  static const _cachedAdminPhoneKey = 'cached_admin_phone_v1';
+  static const _pendingFcmQueueKey = 'pending_fcm_alerts_v1';
 
   final FirebaseFirestore _db = FirebaseFirestore.instance;
 
@@ -29,7 +26,7 @@ class AlertDeliveryService {
     required int secondsUsed,
   }) async {
     try {
-      await _retryPendingSmsAlerts();
+      await _retryPendingFcmAlerts();
       await _ensureDefaultSettings();
 
       final settings = await _loadAlertSettings();
@@ -63,10 +60,6 @@ class AlertDeliveryService {
       }
 
       final internetAvailable = await _hasInternet();
-      final alertTime = DateTime.now();
-      final timeText = _formatAlertTime(alertTime);
-      final alertMessage =
-        'Alert: $studentName using mobile phone for $secondsUsed seconds at $timeText';
 
       String type = 'FCM';
       String status = 'sent';
@@ -80,26 +73,26 @@ class AlertDeliveryService {
         );
 
         if (!fcmOk) {
-          final resolvedPhone = await _getAdminPhone() ?? '';
-          final smsResult = await _sendSmsFallback(
-            preferredPhone: resolvedPhone,
-            body: alertMessage,
-            fallbackToQueueOnFailure: true,
+          type = 'FCM';
+          status = 'failed_fcm';
+          await _enqueuePendingFcmAlert(
+            violationId: violationId,
+            studentName: studentName,
+            regNo: regNo,
+            secondsUsed: secondsUsed,
           );
-          type = 'SMS';
-          status = smsResult;
-          targetPhone = resolvedPhone;
         }
       } else {
-        final resolvedPhone = await _getAdminPhone() ?? '';
-        final smsResult = await _sendSmsFallback(
-          preferredPhone: resolvedPhone,
-          body: alertMessage,
-          fallbackToQueueOnFailure: true,
+        // SMS is sent by native MonitoringService via SmsManager.
+        // Keep this service focused on Firestore logging + FCM delivery.
+        type = 'FCM';
+        status = 'skipped_offline_native_sms';
+        await _enqueuePendingFcmAlert(
+          violationId: violationId,
+          studentName: studentName,
+          regNo: regNo,
+          secondsUsed: secondsUsed,
         );
-        type = 'SMS';
-        status = smsResult;
-        targetPhone = resolvedPhone;
       }
 
       await _storeAlert(
@@ -112,9 +105,15 @@ class AlertDeliveryService {
         targetPhone: targetPhone,
       );
 
+      final alertTriggered =
+          status == 'sent' || status == 'skipped_offline_native_sms';
+      if (alertTriggered) {
+        await _updateCooldown(studentUID: studentUID);
+      }
+
       await _markViolationAlertState(
         violationId: violationId,
-        alertTriggered: true,
+        alertTriggered: alertTriggered,
         alertType: type,
         alertStatus: status,
       );
@@ -127,6 +126,10 @@ class AlertDeliveryService {
         alertStatus: 'failed_internal',
       );
     }
+  }
+
+  Future<void> syncPendingAlertsNow() async {
+    await _retryPendingFcmAlerts();
   }
 
   Future<void> _markViolationAlertState({
@@ -174,16 +177,12 @@ class AlertDeliveryService {
     required int cooldownSeconds,
   }) async {
     try {
-      final snapshot = await _db
-          .collection('alerts')
-          .where('studentUID', isEqualTo: studentUID)
-          .orderBy('lastSentTime', descending: true)
-          .limit(1)
+      final cooldownDoc = await _db
+          .collection('alert_cooldowns')
+          .doc(studentUID)
           .get();
 
-      if (snapshot.docs.isEmpty) return false;
-
-      final lastSentTs = snapshot.docs.first.data()['lastSentTime'];
+      final lastSentTs = cooldownDoc.data()?['lastSentTime'];
       if (lastSentTs is! Timestamp) return false;
 
       final elapsed = DateTime.now().difference(lastSentTs.toDate()).inSeconds;
@@ -191,6 +190,17 @@ class AlertDeliveryService {
     } catch (e) {
       debugPrint('[Alerts] cooldown query failed, skipping cooldown: $e');
       return false;
+    }
+  }
+
+  Future<void> _updateCooldown({required String studentUID}) async {
+    try {
+      await _db.collection('alert_cooldowns').doc(studentUID).set({
+        'studentUID': studentUID,
+        'lastSentTime': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+    } catch (e) {
+      debugPrint('[Alerts] Failed to update cooldown: $e');
     }
   }
 
@@ -248,115 +258,90 @@ class AlertDeliveryService {
     }
   }
 
-  Future<String> _sendSmsFallback({
-    String? preferredPhone,
-    required String body,
-    required bool fallbackToQueueOnFailure,
+  Future<void> _retryPendingFcmAlerts() async {
+    if (!await _hasInternet()) return;
+
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString(_pendingFcmQueueKey);
+    if (raw == null || raw.isEmpty) return;
+
+    final parsed = jsonDecode(raw);
+    if (parsed is! List) return;
+
+    final remaining = <Map<String, dynamic>>[];
+    for (final item in parsed) {
+      if (item is! Map) continue;
+
+      final violationId = (item['violationId'] ?? '').toString();
+      final studentName = (item['studentName'] ?? 'Student').toString();
+      final regNo = (item['regNo'] ?? '').toString();
+      final secondsUsed = int.tryParse((item['secondsUsed'] ?? '0').toString()) ?? 0;
+
+      final ok = await _sendFcmToAdmins(
+        studentName: studentName,
+        regNo: regNo,
+        secondsUsed: secondsUsed,
+      );
+
+      if (ok) {
+        if (violationId.isNotEmpty) {
+          await _markViolationAlertState(
+            violationId: violationId,
+            alertTriggered: true,
+            alertType: 'FCM',
+            alertStatus: 'sent_delayed_online',
+          );
+        }
+      } else {
+        remaining.add({
+          'violationId': violationId,
+          'studentName': studentName,
+          'regNo': regNo,
+          'secondsUsed': secondsUsed,
+        });
+      }
+    }
+
+    await prefs.setString(_pendingFcmQueueKey, jsonEncode(remaining));
+  }
+
+  Future<void> _enqueuePendingFcmAlert({
+    required String violationId,
+    required String studentName,
+    required String regNo,
+    required int secondsUsed,
   }) async {
-    final rawPhone = (preferredPhone ?? '').trim().isNotEmpty
-        ? preferredPhone!.trim()
-        : await _getAdminPhone();
-    final phone = _normalizePhone(rawPhone);
-    if (phone == null || phone.isEmpty) {
-      return 'failed_no_phone';
-    }
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString(_pendingFcmQueueKey);
 
-    if (!_looksValidPhone(phone)) {
-      return 'failed_invalid_phone';
-    }
-
-    final status = await Permission.sms.request();
-    if (!status.isGranted) {
-      if (fallbackToQueueOnFailure) {
-        await _enqueuePendingSms(phone: phone, body: body);
-      }
-      if (status.isPermanentlyDenied) return 'failed_sms_perm_permanently_denied';
-      if (status.isRestricted) return 'failed_sms_perm_restricted';
-      return 'failed_sms_perm_denied';
-    }
-
-    try {
-      await sendSMS(message: body, recipients: [phone]);
-      return 'sent';
-    } catch (e) {
-      debugPrint('[Alerts] SMS send failed, queued: $e');
-      if (fallbackToQueueOnFailure) {
-        await _enqueuePendingSms(phone: phone, body: body);
-      }
-      return 'queued';
-    }
-  }
-
-  Future<String?> _getAdminPhone() async {
-    try {
-      final snap = await _db.collection('admins').doc('admin1').get();
-      final directPhone = _extractAdminPhone(snap.data());
-      if (directPhone.isNotEmpty) {
-        await _cacheAdminPhone(directPhone);
-        return directPhone;
-      }
-
-      final byRole = await _db
-          .collection('admins')
-          .where('role', isEqualTo: 'admin')
-          .limit(1)
-          .get();
-      if (byRole.docs.isNotEmpty) {
-        final rolePhone = _extractAdminPhone(byRole.docs.first.data());
-        if (rolePhone.isNotEmpty) {
-          await _cacheAdminPhone(rolePhone);
-          return rolePhone;
+    final queue = <Map<String, dynamic>>[];
+    if (raw != null && raw.isNotEmpty) {
+      final parsed = jsonDecode(raw);
+      if (parsed is List) {
+        for (final entry in parsed) {
+          if (entry is Map) {
+            queue.add({
+              'violationId': (entry['violationId'] ?? '').toString(),
+              'studentName': (entry['studentName'] ?? 'Student').toString(),
+              'regNo': (entry['regNo'] ?? '').toString(),
+              'secondsUsed': int.tryParse((entry['secondsUsed'] ?? '0').toString()) ?? 0,
+            });
+          }
         }
       }
-
-      // Final DB fallback: scan a few admin docs and pick first valid phone.
-      final anyAdmin = await _db.collection('admins').limit(10).get();
-      for (final doc in anyAdmin.docs) {
-        final phone = _extractAdminPhone(doc.data());
-        if (phone.isNotEmpty) {
-          await _cacheAdminPhone(phone);
-          return phone;
-        }
-      }
-    } catch (_) {
-      // ignore and fallback to cached value
     }
 
-    final prefs = await SharedPreferences.getInstance();
-    final cached = prefs.getString(_cachedAdminPhoneKey) ?? '';
-    return cached.trim().isEmpty ? null : cached.trim();
-  }
-
-  Future<void> _cacheAdminPhone(String phone) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(_cachedAdminPhoneKey, phone);
-  }
-
-  String _extractAdminPhone(Map<String, dynamic>? data) {
-    if (data == null) return '';
-    const keys = ['phone', 'mobile', 'phoneNumber', 'contactNumber'];
-    for (final key in keys) {
-      final value = (data[key] ?? '').toString().trim();
-      if (value.isNotEmpty) return value;
-    }
-    return '';
-  }
-
-  String? _normalizePhone(String? value) {
-    final input = (value ?? '').trim();
-    if (input.isEmpty) return null;
-
-    if (input.startsWith('+')) {
-      final plusNormalized = '+${input.substring(1).replaceAll(RegExp(r'[^0-9]'), '')}';
-      return plusNormalized;
+    final exists = queue.any((item) => item['violationId'] == violationId);
+    if (!exists) {
+      queue.add({
+        'violationId': violationId,
+        'studentName': studentName,
+        'regNo': regNo,
+        'secondsUsed': secondsUsed,
+      });
     }
 
-    return input.replaceAll(RegExp(r'[^0-9]'), '');
-  }
-
-  bool _looksValidPhone(String phone) {
-    final digitsOnly = phone.startsWith('+') ? phone.substring(1) : phone;
-    return digitsOnly.length >= 10;
+    await prefs.setString(_pendingFcmQueueKey, jsonEncode(queue));
   }
 
   Future<void> _storeAlert({
@@ -378,68 +363,10 @@ class AlertDeliveryService {
       'secondsUsed': secondsUsed,
       'internetAvailable': internetAvailable,
       'targetPhone': targetPhone,
-      'smsAttempted': type == 'SMS',
+      'smsAttempted': false,
       'timestamp': FieldValue.serverTimestamp(),
       'lastSentTime': Timestamp.fromDate(now),
     });
-  }
-
-  Future<void> _retryPendingSmsAlerts() async {
-    final prefs = await SharedPreferences.getInstance();
-    final raw = prefs.getString(_retryQueueKey);
-    if (raw == null || raw.isEmpty) return;
-
-    final decoded = jsonDecode(raw);
-    if (decoded is! List) return;
-
-    final remaining = <Map<String, String>>[];
-    for (final item in decoded) {
-      if (item is! Map) continue;
-      final phone = (item['phone'] ?? '').toString().trim();
-      final body = (item['body'] ?? '').toString().trim();
-      if (body.isEmpty) continue;
-
-      try {
-        final smsStatus = await _sendSmsFallback(
-          preferredPhone: phone,
-          body: body,
-          fallbackToQueueOnFailure: false,
-        );
-        if (smsStatus != 'sent') {
-          remaining.add({'phone': phone, 'body': body});
-        }
-      } catch (_) {
-        remaining.add({'phone': phone, 'body': body});
-      }
-    }
-
-    await prefs.setString(_retryQueueKey, jsonEncode(remaining));
-  }
-
-  Future<void> _enqueuePendingSms({
-    required String phone,
-    required String body,
-  }) async {
-    final prefs = await SharedPreferences.getInstance();
-    final raw = prefs.getString(_retryQueueKey);
-
-    final queue = <Map<String, String>>[];
-    if (raw != null && raw.isNotEmpty) {
-      final parsed = jsonDecode(raw);
-      if (parsed is List) {
-        for (final entry in parsed) {
-          if (entry is Map) {
-            queue.add({
-              'phone': (entry['phone'] ?? '').toString(),
-              'body': (entry['body'] ?? '').toString(),
-            });
-          }
-        }
-      }
-    }
-
-    queue.add({'phone': phone, 'body': body});
-    await prefs.setString(_retryQueueKey, jsonEncode(queue));
   }
 
   String _formatAlertTime(DateTime dateTime) {
