@@ -2,6 +2,8 @@ const express = require('express');
 const admin = require('firebase-admin');
 const cors = require('cors');
 const cron = require('node-cron');
+const fs = require('fs');
+const path = require('path');
 require('dotenv').config();
 
 const app = express();
@@ -11,11 +13,28 @@ app.use(cors());
 app.use(express.json());
 
 let firebaseReady = false;
+let firebaseInitError = '';
 
 try {
-  const serviceAccountRaw = process.env.FIREBASE_SERVICE_ACCOUNT;
+  let serviceAccountRaw = process.env.FIREBASE_SERVICE_ACCOUNT;
+
+  if (!serviceAccountRaw && process.env.FIREBASE_SERVICE_ACCOUNT_BASE64) {
+    serviceAccountRaw = Buffer.from(process.env.FIREBASE_SERVICE_ACCOUNT_BASE64, 'base64').toString('utf8');
+  }
+
   if (!serviceAccountRaw) {
-    throw new Error('FIREBASE_SERVICE_ACCOUNT environment variable is missing');
+    const serviceAccountFile = process.env.FIREBASE_SERVICE_ACCOUNT_FILE
+      ? path.resolve(process.env.FIREBASE_SERVICE_ACCOUNT_FILE)
+      : path.resolve(__dirname, 'service-account.json');
+
+    if (fs.existsSync(serviceAccountFile)) {
+      serviceAccountRaw = fs.readFileSync(serviceAccountFile, 'utf8');
+      console.log(`✅ Loaded Firebase service account from file: ${serviceAccountFile}`);
+    }
+  }
+
+  if (!serviceAccountRaw) {
+    throw new Error('Firebase credentials missing. Set FIREBASE_SERVICE_ACCOUNT (JSON), FIREBASE_SERVICE_ACCOUNT_BASE64, or FIREBASE_SERVICE_ACCOUNT_FILE.');
   }
 
   const serviceAccount = JSON.parse(serviceAccountRaw);
@@ -24,7 +43,8 @@ try {
   });
   firebaseReady = true;
 } catch (error) {
-  console.error('❌ Firebase Admin initialization failed:', error.message);
+  firebaseInitError = error.message;
+  console.error('❌ Firebase Admin initialization failed:', firebaseInitError);
 }
 
 // Health check endpoint
@@ -32,7 +52,8 @@ app.get('/', (req, res) => {
   res.json({ 
     status: 'running',
     message: 'Smart Classroom Notification Server',
-    firebaseReady
+    firebaseReady,
+    firebaseInitError: firebaseReady ? null : firebaseInitError
   });
 });
 
@@ -93,6 +114,52 @@ app.post('/send-notification', async (req, res) => {
 
   } catch (error) {
     console.error('Error sending notification:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: error.message 
+    });
+  }
+});
+
+// Endpoint to receive student count from ML script
+app.post('/update-student-count', async (req, res) => {
+  try {
+    if (!firebaseReady) {
+      return res.status(503).json({
+        success: false,
+        error: 'Firebase Admin SDK is not configured on this server'
+      });
+    }
+
+    const { studentCount, currentCount, uniqueCount, classroomId } = req.body;
+
+    const effectiveCurrentCount =
+      currentCount !== undefined ? Number(currentCount) : Number(studentCount);
+
+    if (!Number.isFinite(effectiveCurrentCount) || !classroomId) {
+      return res.status(400).json({ 
+        success: false, 
+        error: 'Missing/invalid current student count or classroomId' 
+      });
+    }
+
+    const db = admin.firestore();
+    await db.collection('classroom_metrics').doc(classroomId).set({
+      // App consumes studentCount as live current camera count.
+      studentCount: effectiveCurrentCount,
+      currentCount: effectiveCurrentCount,
+      uniqueCount: Number.isFinite(Number(uniqueCount)) ? Number(uniqueCount) : null,
+      lastUpdated: admin.firestore.FieldValue.serverTimestamp()
+    }, { merge: true });
+
+    res.json({
+      success: true,
+      message: `Student count for ${classroomId} updated to ${effectiveCurrentCount}`,
+      currentCount: effectiveCurrentCount
+    });
+
+  } catch (error) {
+    console.error('Error updating student count:', error);
     res.status(500).json({ 
       success: false, 
       error: error.message 
@@ -362,6 +429,14 @@ cron.schedule(
 
 // Start server
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
+const server = app.listen(PORT, () => {
   console.log(`✅ Smart Classroom Notification Server running on port ${PORT}`);
+});
+
+server.on('error', (error) => {
+  if (error && error.code === 'EADDRINUSE') {
+    console.error(`❌ Port ${PORT} is already in use. Stop the existing process or set a different PORT in backend/.env.`);
+    return;
+  }
+  console.error('❌ Server startup error:', error.message || error);
 });

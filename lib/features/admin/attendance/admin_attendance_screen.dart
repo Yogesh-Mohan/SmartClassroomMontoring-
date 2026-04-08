@@ -7,6 +7,7 @@ import 'package:google_fonts/google_fonts.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/widgets/glass_card.dart';
 import '../../../services/smart_attendance_service.dart';
+import '../../../services/student_count_service.dart';
 
 class AdminAttendanceScreen extends StatefulWidget {
   const AdminAttendanceScreen({super.key});
@@ -182,6 +183,51 @@ class _AdminAttendanceScreenState extends State<AdminAttendanceScreen> {
     return '$m:$s';
   }
 
+  Widget _buildLiveCameraCountCard() {
+    return StreamBuilder<int>(
+      stream: StudentCountService().streamStudentCount(classroomId: 'CR-01'),
+      builder: (context, snapshot) {
+        final count = snapshot.data ?? 0;
+        final statusColor = count > 0 ? AppColors.success : AppColors.textSecondary;
+
+        return GlassCard(
+          child: Row(
+            children: [
+              Icon(Icons.videocam_rounded, color: statusColor, size: 24),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text(
+                  'Live Camera Count',
+                  style: GoogleFonts.poppins(
+                    color: Colors.white,
+                    fontSize: 14,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+              Text(
+                '$count',
+                style: GoogleFonts.poppins(
+                  color: statusColor,
+                  fontSize: 22,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              const SizedBox(width: 6),
+              Text(
+                'Students',
+                style: GoogleFonts.poppins(
+                  color: AppColors.textSecondary,
+                  fontSize: 12,
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
   @override
   void dispose() {
     _timer?.cancel();
@@ -213,6 +259,8 @@ class _AdminAttendanceScreenState extends State<AdminAttendanceScreen> {
                 fontWeight: FontWeight.w700,
               ),
             ),
+            const SizedBox(height: 14),
+            _buildLiveCameraCountCard(),
             const SizedBox(height: 14),
             GlassCard(
               child: Column(
@@ -359,9 +407,16 @@ class _AdminAttendanceScreenState extends State<AdminAttendanceScreen> {
             ),
             const SizedBox(height: 16),
             if (currentPeriod != null)
-              _LiveAttendancePanel(
-                period: currentPeriod,
-                service: _service,
+              StreamBuilder<int>(
+                stream: StudentCountService().streamStudentCount(classroomId: 'CR-01'),
+                builder: (context, countSnapshot) {
+                  final liveCameraCount = countSnapshot.data ?? 0;
+                  return _LiveAttendancePanel(
+                    period: currentPeriod,
+                    service: _service,
+                    liveCameraCount: liveCameraCount,
+                  );
+                },
               ),
           ],
         ),
@@ -411,8 +466,13 @@ class _MetricTile extends StatelessWidget {
 class _LiveAttendancePanel extends StatefulWidget {
   final String period;
   final SmartAttendanceService service;
+  final int liveCameraCount;
 
-  const _LiveAttendancePanel({required this.period, required this.service});
+  const _LiveAttendancePanel({
+    required this.period,
+    required this.service,
+    required this.liveCameraCount,
+  });
 
   @override
   State<_LiveAttendancePanel> createState() => _LiveAttendancePanelState();
@@ -520,7 +580,7 @@ class _LiveAttendancePanelState extends State<_LiveAttendancePanel> {
             present++;
           }
         }
-        final absent = rows.length - present;
+        final currentCameraCount = widget.liveCameraCount;
 
         return GlassCard(
           child: Column(
@@ -674,17 +734,7 @@ class _LiveAttendancePanelState extends State<_LiveAttendancePanel> {
                       children: [
                         Expanded(
                           child: Text(
-                            'Total Present: $present',
-                            style: GoogleFonts.poppins(
-                              color: Colors.white,
-                              fontWeight: FontWeight.w500,
-                            ),
-                          ),
-                        ),
-                        Expanded(
-                          child: Text(
-                            'Total Absent: $absent',
-                            textAlign: TextAlign.end,
+                            'Current Students (Camera): $currentCameraCount',
                             style: GoogleFonts.poppins(
                               color: Colors.white,
                               fontWeight: FontWeight.w500,
@@ -694,24 +744,10 @@ class _LiveAttendancePanelState extends State<_LiveAttendancePanel> {
                       ],
                     ),
                     const SizedBox(height: 10),
-                    Row(
-                      children: [
-                        Expanded(
-                          child: _CountPill(
-                            icon: Icons.check_circle,
-                            value: present,
-                            background: const Color(0xFF65B9E5),
-                          ),
-                        ),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: _CountPill(
-                            icon: Icons.cancel,
-                            value: absent,
-                            background: const Color(0xFFF39CA0),
-                          ),
-                        ),
-                      ],
+                    _CountPill(
+                      icon: Icons.videocam_rounded,
+                      value: currentCameraCount,
+                      background: const Color(0xFF65B9E5),
                     ),
                   ],
                 ),

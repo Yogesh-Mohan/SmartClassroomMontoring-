@@ -295,6 +295,14 @@ service cloud.firestore {
       allow write: if isAdmin();
     }
 
+    // ── CLASSROOM METRICS (ML live student count) ───────────────────────────
+    // Backend Admin SDK writes are server-side. Admin app needs read access
+    // to render Live Camera Count on attendance screen.
+    match /classroom_metrics/{docId} {
+      allow read: if request.auth != null && isAdmin();
+      allow write: if false;
+    }
+
     // ── BLOCK EVERYTHING ELSE ────────────────────────────────────────────────
     match /{document=**} {
       allow read, write: if false;

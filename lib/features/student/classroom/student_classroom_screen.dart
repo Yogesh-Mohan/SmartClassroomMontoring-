@@ -122,7 +122,7 @@ class _StudentClassroomScreenState extends State<StudentClassroomScreen> {
         if (!data.containsKey('monitoring') && data.containsKey('montoring')) {
           debugPrint('[StudentClassroom] Typo field found in ${doc.id}: montoring. Please migrate to monitoring.');
         }
-        final monitoringRaw = data['monitoring'];
+        final monitoringRaw = data['monitoring'] ?? data['montoring'];
         final isClass = monitoringRaw == true || monitoringRaw == 'true';
         if (!isClass) continue;
         periods.add(_normalizePeriodKey(doc.id));
@@ -684,6 +684,27 @@ class _StudentDayScheduleScreenState extends State<StudentDayScheduleScreen> {
 
   int get _currentMinutes => _now.hour * 60 + _now.minute;
 
+  bool _shouldAutoMarkAbsent(_TimetablePeriod period) {
+    if (!period.isClass) return false;
+
+    final selectedDayOnlyDate = DateTime(
+      widget.selectedDate.year,
+      widget.selectedDate.month,
+      widget.selectedDate.day,
+    );
+    final nowOnlyDate = DateTime(_now.year, _now.month, _now.day);
+
+    if (selectedDayOnlyDate.isBefore(nowOnlyDate)) {
+      return true;
+    }
+
+    if (!isSameDay(selectedDayOnlyDate, nowOnlyDate)) {
+      return false;
+    }
+
+    return _currentMinutes >= period.endTime;
+  }
+
   _TimetablePeriod? get _activePeriod {
     if (!_isToday) return null;
     final minutes = _currentMinutes;
@@ -779,7 +800,7 @@ class _StudentDayScheduleScreenState extends State<StudentDayScheduleScreen> {
       if (!data.containsKey('monitoring') && data.containsKey('montoring')) {
         debugPrint('[StudentClassroom] Typo field found in ${doc.id}: montoring. Please migrate to monitoring.');
       }
-      final monitoringRaw = data['monitoring'];
+      final monitoringRaw = data['monitoring'] ?? data['montoring'];
       final isClass = monitoringRaw == true || monitoringRaw == 'true';
       final start = (data['startTime'] as num?)?.toInt() ?? 0;
       final end = (data['endTime'] as num?)?.toInt() ?? 0;
@@ -1095,30 +1116,39 @@ class _StudentDayScheduleScreenState extends State<StudentDayScheduleScreen> {
                             final isSubmitted = _isSubmittedForPeriod(
                               period.id,
                             );
+                            final autoAbsent =
+                                status.isEmpty && _shouldAutoMarkAbsent(period);
 
                             Color borderColor = Colors.white.withValues(
                               alpha: 0.18,
                             );
-                            String statusLabel = 'Not marked';
+                            String statusLabel = '';
                             Color statusColor = AppColors.textSecondary;
 
                             if (status == 'present') {
                               borderColor = AppColors.success;
                               statusColor = isSubmitted
-                                  ? AppColors.success
-                                  : AppColors.textSecondary;
+                                ? AppColors.success
+                                : AppColors.lightBlue;
                               statusLabel = isSubmitted
-                                  ? 'Present'
-                                  : 'Not marked';
-                            } else if (status == 'absent') {
+                                ? 'Present'
+                                : 'Present (Pending)';
+                            } else if (status == 'absent' || autoAbsent) {
                               borderColor = AppColors.danger;
-                              statusColor = isSubmitted
+                              if (autoAbsent) {
+                                statusColor = AppColors.danger;
+                                statusLabel = 'Absent';
+                              } else {
+                                statusColor = isSubmitted
                                   ? AppColors.danger
-                                  : AppColors.textSecondary;
-                              statusLabel = isSubmitted
+                                  : AppColors.lightBlue;
+                                statusLabel = isSubmitted
                                   ? 'Absent'
-                                  : 'Not marked';
+                                  : 'Absent (Pending)';
+                              }
                             }
+
+                            final showStatus = period.isClass && statusLabel.isNotEmpty;
 
                             final isActive =
                                 _isToday &&
@@ -1180,14 +1210,15 @@ class _StudentDayScheduleScreenState extends State<StudentDayScheduleScreen> {
                                         crossAxisAlignment:
                                             CrossAxisAlignment.end,
                                         children: [
-                                          Text(
-                                            statusLabel,
-                                            style: GoogleFonts.poppins(
-                                              color: statusColor,
-                                              fontSize: 12,
-                                              fontWeight: FontWeight.w700,
+                                          if (showStatus)
+                                            Text(
+                                              statusLabel,
+                                              style: GoogleFonts.poppins(
+                                                color: statusColor,
+                                                fontSize: 12,
+                                                fontWeight: FontWeight.w700,
+                                              ),
                                             ),
-                                          ),
                                           if (isActive)
                                             Text(
                                               'Active now',
